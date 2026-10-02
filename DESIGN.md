@@ -521,7 +521,7 @@ type WindowsMaster interface {
 |---|---|
 | linux | ✅ 已实现 |
 | darwin | ✅ 已实现（主要开发与验证平台） |
-| windows | ⏳ M3 计划（ConPTY，Win10 1809 / build 17763+） |
+| windows | ✅ 已实现（ConPTY，Win10 1809 / build 17763+） |
 | freebsd / openbsd / netbsd | ⏸ **暂缓**，返回 `ErrUnsupported` |
 | 其他 Unix（solaris、illumos、aix、zos…） | `ErrUnsupported` |
 
@@ -612,7 +612,7 @@ serial.go             // M5
 | **M0** | 骨架、接口定稿、CI（三平台）、`go.mod` 定 `go 1.24.0` + `x/sys@v0.41.0` | ✅ **已完成**：接口/类型落地，`gofmt`/`build`/`vet`/`test` 在 go1.24.0 下通过，11 平台交叉 `build`+`vet` 通过；三平台 CI 待仓库建立后首跑 |
 | **M1** | Unix：`OpenPty`/`Close`、`Size`/`Resize`、`Spawn`、`ExitStatus`、`Child`/`Killer` | ✅ **完成**：13 用例在 darwin（本地）与 linux（CI 运行 #5）全部通过，含真实 shell 往返与退出码；-race 与 11 平台交叉编译亦通过 |
 | **M2** | writer 所有权收尾、`EIO→EOF` 归一化回归、阻塞/唤醒用例 | **Linux CI 上闭合 T2b**；`EIO→EOF` 在 linux/darwin 行为一致；`Fd()` 禁用规则有 lint 兜底 |
-| **M3** | Windows ConPTY：`CreateProcess` + attribute list + 双管道 + `Resize` | `windows-latest` 上能跑通 `cmd.exe`/`powershell` |
+| **M3** | Windows ConPTY：`CreateProcess` + attribute list + 双管道 + `Resize` | ✅ **完成**：CI 运行 #14 的 `windows-latest` 上全部通过 —— 真实 `cmd.exe` 输出、退出码 7、`Kill`、`CloseWrite`、`Resize`。时序与句柄所有权由平台中立的假 host 在 linux/darwin 上另外覆盖 |
 | **M4** | `Command`/`LoginShell`/`Environ`/`Shell`/`HomeDir`/`Env*`、Windows 注册表环境合并、`SpawnOption` | ✅ **完成**：29 个用例在 darwin（本地）、linux 与 windows（CI 运行 #9）全部通过。`PATHEXT` 未自行实现：`exec.LookPath` 在 Windows 上已经处理扩展名（见 §10.5）。`umask` 见 D3，属客观缺口 |
 | **M5** | `serial`（串口），与 `System`/`Master` 抽象合流 | 能用 `System` 抽象打开串口 |
 | **M6** | 文档、README（含与 Rust crate / go-pty 的关系说明）、API 对照表 | 可发布 |
@@ -686,6 +686,18 @@ require golang.org/x/sys v0.41.0
 > **M1 因此是第一个在真实 Linux 上验证过的里程碑**，不再是「只在 darwin 上看起来对」。
 
 ### 10.5 M4 实现期的新发现
+
+（见 §10.6。）
+
+### 10.6 M3 实现期的新发现
+
+| # | 发现 | 影响 |
+|---|---|---|
+| **T14** | 把 ConPTY 时序抽到假 host 之后，**第一次运行就抓到了真实 bug**：输出管道被我写成 `(consoleOut, ourOut)`，把控制台的**读端**给了控制台 | 这正是 §3.7 警告过的「管道方向极易写反」。在 darwin 上就被抓住，而不是等 Windows 往返 |
+| **T15** | 运行 #12 在 5.292s 失败且**没有任何 per-test 失败行** —— 二进制死了而不是报错。5s 正好是测试里的读超时，超时后紧接着就是 `m.Close()`，随后 `t.Cleanup` 又 `Close` 一次 | `ClosePseudoConsole` 对已关闭句柄是未定义行为，会**直接把进程带走**。`Close` 已用 `sync.Once` 变成幂等 —— 这本来就该做，因为「显式 Close + defer Close」是调用方最自然的写法 |
+| **T16** | 控制台在 pseudoconsole 关闭前**一直持有输出管道**，所以 Windows 上「读到 EOF」不等于子进程退出 | Windows 上判断会话结束应看 `Child.Wait`；`Master` 的文档已写明。`CloseWrite` 则相反：Windows 上关掉输入管道我方这端会给子进程**真实 EOF**，比 Unix 的纯逻辑半关更强 |
+| **T17** | 运行 #13 的失败全是我自己的测试错：三个 envblock 用例断言精确内容，却忘了实现**正确地**注入了 `SYSTEMROOT` —— 而 `SYSTEMROOT` 只在 Windows 上通常存在 | 已用统一的 `withoutSystemRoot(t)` 辅助函数显式清除，并把这类「环境隐式依赖」写进注释。验证方式：分别在设置/不设置 `SYSTEMROOT` 下跑同一批用例 |
+| **T18**（工具链） | **失败的 job 日志需要鉴权才能通过 API 读取**，只剩一句 `Process completed with exit code 1`；而 check-run 的 annotation **可以匿名读取** | CI 的 `Test` 步骤现在把失败用例名与消息以 `::error::` 重新抛出。运行 #13 因此第一次给出了真正的原因。修 #12 与 #13 都是靠这个才从「猜」变成「看」 |
 
 | # | 发现 | 影响 |
 |---|---|---|
@@ -771,6 +783,11 @@ Windows 上真正执行到的包括注册表环境合并、`Path` 拼接、`EXPA
 | 26 | `passwdShell` | 自行解析 `/etc/passwd`（`os/user` 不暴露 `pw_shell`）；macOS 上通常查不到而回退 `/bin/sh` | M4 实现 |
 | 27 | `isExecutable` | 用 mode 位而非 `access(2)`，以免 `//go:build unix` 引入平台相关 syscall | M4 实现 |
 | 28 | 合并策略的位置 | 抽到平台中立的 `envmerge.go`，让 Windows 逻辑也能在 linux/darwin CI 上被测 | M4 发现（T10） |
+| 29 | ConPTY 时序的位置 | 抽到平台中立的 `conpty.go`（`conptyHost` 接口），只有 kernel32 翻译留在 Windows 文件 | M3 方案（用户批准） |
+| 30 | `Close` 幂等 | 用 `sync.Once` 包住；`ClosePseudoConsole` 二次调用会**直接杀掉进程** | M3 发现（T15） |
+| 31 | Windows 上的 `CloseWrite` | 关闭控制台输入管道我方这端，向子进程送**真实 EOF**（Unix 上只能是逻辑半关） | M3 发现（T16） |
+| 32 | Windows 上「读到底」 | 控制台在 pseudoconsole 关闭前一直持有输出管道，因此 **`Wait` 才是会话结束的信号**，不是 EOF | M3 发现（T16） |
+| 33 | `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` | 属性值是 HPCON **本身**（不是指向它的指针）；用辅助函数转换以避开 `go vet` 的 unsafeptr 检查 | M3 实现 |
 
 ---
 

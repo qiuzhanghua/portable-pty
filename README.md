@@ -3,10 +3,11 @@
 A cross-platform pseudo-terminal (PTY) library for Go, ported from the Rust
 [`portable-pty`](https://github.com/wezterm/wezterm/tree/main/pty) crate.
 
-> **Status: early.** Linux and macOS are implemented: open/close, window size,
-> spawning with a controlling terminal, exit status including signal names, and
-> a child that can be killed independently of `Wait`. Windows ConPTY and serial
-> ports are not written yet, and neither are the FreeBSD/OpenBSD/NetBSD paths —
+> **Status: early.** Linux, macOS and Windows are implemented: open/close,
+> window size, spawning with a controlling terminal, exit status, and a child
+> that can be killed independently of `Wait`. The command helpers
+> (`Command`, `LoginShell`, `Environ`) work on every platform. Serial ports are
+> not written yet, and neither are the FreeBSD/OpenBSD/NetBSD paths —
 > `Native()` returns `ErrUnsupported` there. The API may still change.
 > See [DESIGN.md](DESIGN.md) for the plan.
 
@@ -29,7 +30,7 @@ report `ErrUnsupported`.
 | | [creack/pty](https://github.com/creack/pty) | [aymanbagabas/go-pty](https://github.com/aymanbagabas/go-pty) | this module |
 |---|---|---|---|
 | Unix PTY | ✅ | ✅ | ✅ linux, darwin |
-| Windows ConPTY | ❌ | ✅ | planned |
+| Windows ConPTY | ❌ | ✅ | ✅ |
 | Runtime-selectable PTY system | ❌ | ❌ | ✅ |
 | Command builder | ❌ | ❌ | planned |
 | Exit status with signal name | ❌ | ❌ | ✅ |
