@@ -1,15 +1,11 @@
 package pty
 
-import "os"
-
 // SpawnOption configures a single call to Master.Spawn.
 type SpawnOption func(*spawnConfig)
 
-// spawnConfig holds the resolved options for one spawn attempt. Fields that
-// only apply to some platforms are simply ignored elsewhere.
+// spawnConfig holds the resolved options for one spawn attempt.
 type spawnConfig struct {
 	controllingTTY bool
-	umask          *os.FileMode
 }
 
 // defaultSpawnConfig returns the options applied when no SpawnOption is given.
@@ -21,6 +17,10 @@ func defaultSpawnConfig() spawnConfig {
 // terminal. The default is true, which is what you normally want. Setting it to
 // false is occasionally needed when crossing container boundaries (for example
 // flatpak), where acquiring a controlling terminal fails.
+//
+// The controlling terminal is only acquired when this package assigns the slave
+// to at least one of the child's standard streams. If the caller supplies all
+// three, there is no slave to attach and this option has no effect.
 func WithControllingTTY(enabled bool) SpawnOption {
 	return func(c *spawnConfig) { c.controllingTTY = enabled }
 }

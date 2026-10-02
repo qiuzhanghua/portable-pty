@@ -225,6 +225,36 @@ Windows 无信号概念 → `ExitStatus.Signal` 恒为空；`Resize` 走 `Resize
 
 > 仍待 CI 验证（§10 T5）：以上为**参照实现交叉确认**，尚未在真实 Windows 上跑通本项目的代码。
 
+### 3.8 Darwin：slave 未打开前，master 上的 winsize ioctl 会失败 ✅（实测发现）
+
+在 darwin 上对**刚打开、且从未有过 slave** 的 pty master 调用 `TIOCSWINSZ` / `TIOCGWINSZ`，内核返回 **`ENOTTY`**；一旦打开过 slave，两者立刻成功。
+
+实测输出（`/dev/ptmx`，darwin/arm64）：
+
+```
+TIOCPTYGNAME -> "/dev/ttys001"   err=<nil>
+TIOCPTYGRANT -> <nil>
+TIOCPTYUNLK  -> <nil>
+--- 尚未打开 slave ---
+IoctlSetWinsize -> inappropriate ioctl for device
+IoctlGetWinsize -> inappropriate ioctl for device
+--- 打开 slave 之后 ---
+IoctlSetWinsize -> <nil>
+IoctlGetWinsize -> <nil>  {Row:24 Col:80}
+```
+
+**这条直接改写了 D2 的形态**：`OpenPty` 必须**先打开 slave 并持有它**，否则连窗口尺寸都设不了，`Resize()` / `Size()` 在 spawn 之前也会失效。这也解释了上游为什么用 `PtyPair` 一次返回两端 —— 不是设计品味，是系统约束。Linux 上不存在该限制，但实现走同一条路。
+
+> 附带确认：`unix.Syscall`（x/sys）与 `syscall.Syscall`（stdlib）在 darwin 上**都能**完成 `TIOCPTYGNAME` / `TIOCPTYGRANT` / `TIOCPTYUNLK`。最初怀疑 x/sys 有问题是一次误判，已回退。
+
+### 3.9 子进程的 stdio 之所以是阻塞的
+
+`os.OpenFile` 会把 slave 也放进 netpoller 并置 `O_NONBLOCK`。子进程会用 `dup2` 继承**同一个 open file description**，于是会连带继承 `O_NONBLOCK` —— 那会让 shell 之类程序在写 stdout 时拿到 `EAGAIN`。
+
+之所以没出问题：`os/exec` 在启动前会对每个 child file 调用 `(*os.File).Fd()`（`os/exec_posix.go`：`sysattr.Files = append(sysattr.Files, f.Fd())`），而 §3.5 第 3 条的副作用会**清掉 `O_NONBLOCK`**。
+
+也就是说，这里的正确性**依赖于那个「陷阱」**。它已被 `TestChildStdioIsBlocking` 显式钉住（子进程自我检查 fd 0/1/2 的 `F_GETFL`），不靠假设。
+
 ---
 
 ## 4. 核心设计决策
@@ -253,6 +283,10 @@ Rust 用 `PtyPair{slave, master}` 且依赖 Drop 顺序（`lib.rs` 注释明写 
 
 → 采用 `System.OpenPty(size) (Master, error)`，spawn 挂在 `Master` 上。
 
+**但 slave 仍然要开，只是不对外暴露。** §3.8 的实测表明：darwin 上 master 在 slave 从未打开过时连 winsize 都设不了。因此 `OpenPty` 会**自己打开 slave 并持有它**，用它完成尺寸设置，并在首次 `Spawn` 时把它交给子进程，随即**关闭父进程这侧的副本**（否则 master 永远看不到会话结束，见 §8 陷阱 4）。
+
+所以最终形态是「对外没有 Slave 对象，对内 slave 由 Master 代管」—— 既避开了 Windows 上的幽灵对象，也满足了 darwin 的系统约束。若后续再 `Spawn`，`spawnSlave` 会按同一路径重新打开一个。
+
 ### D3 —— `CommandBuilder` 拆成辅助函数 + `SpawnOption`
 
 `CommandBuilder` 的能力按来源拆分：
@@ -264,7 +298,7 @@ Rust 用 `PtyPair{slave, master}` 且依赖 Drop 顺序（`lib.rs` 注释明写 
 | base env 快照 | `pty.Environ()` |
 | login shell（`argv0 = -bash`） | `pty.LoginShell()` |
 | `controlling_tty` 开关 | `pty.WithControllingTTY(bool)` |
-| `umask` | `pty.WithUmask(os.FileMode)` |
+| `umask` | ❌ **Go 做不到**，已从 API 移除 |
 | **Windows 注册表环境合并**（HKLM+HKCU，`REG_EXPAND_SZ` 展开、PATH 拼接） | `pty.Environ()` 内实现 |
 | **`PATHEXT` 搜索** | Windows 侧 `CreateProcess` 前自行解析 |
 | **MSVCRT 引号规则** | 改用 `windows.ComposeCommandLine`（Go 已有正确实现） |
@@ -272,6 +306,14 @@ Rust 用 `PtyPair{slave, master}` 且依赖 Drop 顺序（`lib.rs` 注释明写 
 | 大小写不敏感环境键 | Windows 侧规范化 |
 
 → **不引入新的命令类型**，用 `pty.Command(name, args...)` / `pty.LoginShell()` 构造 `*exec.Cmd`，用 `SpawnOption` 承载 spawn 期参数。
+
+**为什么 `umask` 被砍掉（设计变更）**：Rust 用 `pre_exec` 在 fork 之后、exec 之前于**子进程**里调 `umask()`。Go **没有等价的钩子**：`syscall.SysProcAttr` 在 linux 与 darwin 上都没有 `Umask` 字段（已逐个核对完整结构体），而 `os/exec` 也不提供 fork/exec 之间的回调。
+
+剩下的两条路都不该走：
+- **父进程里 `syscall.Umask` 前后包夹 `cmd.Start()`** —— umask 是**进程全局**的，会与其它 goroutine 并发创建文件产生竞态，静默写出错误权限的文件。库不该这么干。
+- **用 `/bin/sh -c 'umask NNN; exec ...'` 包一层** —— 改变语义（多一层 shell、命令行要二次转义），和 D1 否决 `cmd.exe` 包装是同一个理由。
+
+因此这是相对上游的一处**能力缺口**，已在 §6 如实标为 ❌。若将来 Go 增加 `SysProcAttr.Umask`，应第一时间补回。
 
 ### D4 —— reader/writer 所有权：`io.ReadWriteCloser` + `CloseWrite()`
 
@@ -281,9 +323,14 @@ Rust 的 `try_clone_reader()` / `take_writer()` 在 Go 里不必逐字复刻：`
 
 **⚠️ 语义诚实性（必须写进 Godoc）**：pty 上「真正的半关」并不成立 —— master 只有**一个** fd，只有**最后一个** master 句柄关闭时 slave 才会收到 `SIGHUP`/`EIO`。Rust 文档中 "Dropping the writer will send EOF to the slave end" 对 pty 而言并不准确。
 
-因此 Godoc 必须写明：
-- `CloseWrite()` 关闭写方向（Unix 上基于 dup 的独立写 fd）；
-- 它**不保证** slave 立即看到 EOF；
+**实现取舍（已落地）**：原先设想的「dup 出独立写 fd」这条其实**无效** —— 关掉其中一个 dup 不会让 slave 收到 EOF，因为同一 open file description 的另一个 dup 仍然存活，而且 pty 设备本身没有「写方向」可关。所以 `CloseWrite()` 实现为**逻辑半关**：
+
+- 之后的 `Write` 一律返回 `os.ErrClosed`（与 `Close()` 之后的错误一致，方便 `errors.Is`）；
+- `Read` 完全不受影响；
+- **不关任何 fd**，因此**不会**挂断 slave。
+
+Godoc 必须写明：
+- `CloseWrite()` 只是逻辑半关，**不会**让 slave 看到 EOF；
 - 需要真正终止会话时应使用 `Close()`；
 - 需要「发送 EOF 字符」语义时应向 master **写 VEOF（通常是 `^D`）**。
 
@@ -362,7 +409,8 @@ func Native() System
 type Master interface {
     io.ReadWriteCloser
 
-    // CloseWrite 关闭写方向，但不保证 slave 立即看到 EOF。
+    // CloseWrite 逻辑上关闭写方向：之后 Write 返回 os.ErrClosed，Read 不受影响。
+    // 它不关 fd，因此不会让 slave 看到 EOF；真正的挂断请用 Close。
     // 详见 D4 的语义说明。
     CloseWrite() error
 
@@ -394,7 +442,8 @@ type Killer interface {
 type SpawnOption func(*spawnConfig)
 
 func WithControllingTTY(bool) SpawnOption
-func WithUmask(os.FileMode) SpawnOption
+
+// 上游 CommandBuilder 的 umask 无法在 Go 中实现，故不提供（见 D3）。
 
 // ---------- 命令辅助（替代 CommandBuilder） ----------
 
@@ -444,7 +493,7 @@ type WindowsMaster interface {
 | `MasterPty::resize` | `Master.Resize` | ✅ |
 | `MasterPty::get_size` | `Master.Size` | ✅ |
 | `MasterPty::try_clone_reader` | 内建 `io.Reader`（Unix 可 dup 独立句柄） | ✅ 语义等价，形状不同 |
-| `MasterPty::take_writer` | `io.Writer` + `CloseWrite()` | ⚠️ 见 D4 |
+| `MasterPty::take_writer` | `io.Writer` + `CloseWrite()`（逻辑半关） | ⚠️ 见 D4 |
 | `unix::tty_name` | `Master.Name()` | ✅ |
 | `unix::get_termios` | `UnixMaster.Termios()` | ✅ |
 | `unix::process_group_leader` | `UnixMaster.Pgrp()` | ✅ |
@@ -467,15 +516,19 @@ type WindowsMaster interface {
 
 ### 7.1 目标平台
 
-| 平台 | 状态 |
+| 平台 | 状态（M1 之后） |
 |---|---|
-| linux | 目标 |
-| darwin | 目标（主要开发平台） |
-| freebsd / openbsd / netbsd | 目标 |
-| windows | 目标（ConPTY，Win10 1809 / build 17763+） |
+| linux | ✅ 已实现 |
+| darwin | ✅ 已实现（主要开发与验证平台） |
+| windows | ⏳ M3 计划（ConPTY，Win10 1809 / build 17763+） |
+| freebsd / openbsd / netbsd | ⏸ **暂缓**，返回 `ErrUnsupported` |
 | 其他 Unix（solaris、illumos、aix、zos…） | `ErrUnsupported` |
 
-采用 `//go:build unix`（Go ≥ 1.19 提供）+ `//go:build windows` 组织，未覆盖平台走明确的 `ErrUnsupported`（与 `go-pty` 的做法一致）。
+**为什么 BSD 被暂缓（对用户原决定的修正）**：三个 BSD 各有一套互不相同的 open/grant/unlock 序列 —— freebsd 走 `posix_openpt` + `FIODGNAME`；openbsd 只有一个 `/dev/ptm` + `PTMGET`，一次 ioctl 同时返回两端 fd；netbsd 才是 `/dev/ptmx` + `TIOCPTSNAME` + `TIOCGRANTPT`。而且它们取到的都是**裸 fd**，要进 netpoller 必须先自己 `SetNonblock` 再 `os.NewFile`（§3.5 第 2 条）。
+
+本项目**没有任何 BSD CI**（cross-compile 只能证明能编译，不能证明能跑）。把无法验证的代码标成「支持」是负债，不是能力。因此 M1 只交付能真实验证的平台，BSD 留待有验证手段时再补；`cross-compile` 矩阵仍保留它们，确保至少编译不被破坏。
+
+构建约束相应收紧为 `//go:build linux || darwin`，其余平台一律 `ErrUnsupported`。
 
 ### 7.2 为什么不做 Solaris/illumos
 
@@ -490,7 +543,7 @@ system_unix.go        // //go:build unix —— UnixSystem.OpenPty
 system_windows.go     // //go:build windows —— ConPtySystem.OpenPty + 可用性探测
 master_unix.go        // openpt/grantpt/unlockpt/ptsname、Resize/Size/Termios/Pgrp
 master_windows.go     // CreatePseudoConsole、管道、Resize、ClosePseudoConsole
-spawn_unix.go         // os/exec 路径 + Setsid/Setctty + umask + CloseWrite(dup)
+spawn_unix.go         // os/exec 路径 + Setsid/Setctty + 把 slave 交给子进程
 spawn_windows.go      // CreateProcess + StartupInfoEx + env block + ComposeCommandLine
 child_unix.go         // Child/Killer（SIGHUP→宽限→强杀）
 child_windows.go      // Child/Killer（TerminateProcess / 句柄）
@@ -537,7 +590,7 @@ serial.go             // M5
 | # | 陷阱 | 说明 |
 |---|---|---|
 | 1 | **不要调用 `(*os.File).Fd()`** | 会 `SetBlocking()` 清除 `O_NONBLOCK`，而该标志被所有 dup 共享 → 破坏全部句柄的 poller 语义。用 `SyscallConn()`。（§3.5.3，**已实测确认**） |
-| 2 | **`CloseWrite()` 不保证 slave 立刻收到 EOF** | pty 只有单个 master fd，半关语义不成立。（D4） |
+| 2 | **`CloseWrite()` 不会让 slave 收到 EOF** | 它只让后续 Write 返回 `os.ErrClosed`；pty 只有单个 master fd，真正的半关不成立。（D4） |
 | 3 | **Windows 上 `cmd.Process`/`ProcessState`/`Cancel`/`WaitDelay` 不生效** | 我们自行 `CreateProcess`，绕过了 `exec.Cmd.Start`。（D1） |
 | 4 | **父进程必须释放 slave** | Unix 上父进程若持有 slave fd，master 永远看不到 EOF/HUP（`creack/pty` 的做法是 spawn 后立即关闭）。`Spawn` 默认应关掉父进程侧的 slave 并文档化。 |
 | 5 | **`Close()` 之后 `Read` 返回 `os.ErrClosed`，而不是 `io.EOF`** | 需在文档与测试中明确区分「正常 EOF」与「本地关闭」。**已实测确认**：darwin 上返回 `read /dev/ptmx: file already closed`。 |
@@ -551,8 +604,8 @@ serial.go             // M5
 | 阶段 | 内容 | 完成判据 |
 |---|---|---|
 | **M0** | 骨架、接口定稿、CI（三平台）、`go.mod` 定 `go 1.24.0` + `x/sys@v0.41.0` | ✅ **已完成**：接口/类型落地，`gofmt`/`build`/`vet`/`test` 在 go1.24.0 下通过，11 平台交叉 `build`+`vet` 通过；三平台 CI 待仓库建立后首跑 |
-| **M1** | Unix：`OpenPty`/`Close`、`Size`/`Resize`、`Spawn`、`ExitStatus` | linux 与 darwin 的 CI 上都能跑通 `bash` 并正确拿到退出码（不能只测 darwin） |
-| **M2** | reader/writer 所有权、`CloseWrite`、`EIO→EOF` 归一化、阻塞/唤醒回归用例 | **Linux CI 上闭合 T2b**；`EIO→EOF` 在 linux/darwin 行为一致；`Fd()` 禁用规则有 lint 兜底 |
+| **M1** | Unix：`OpenPty`/`Close`、`Size`/`Resize`、`Spawn`、`ExitStatus`、`Child`/`Killer` | ✅ **darwin 全部通过**（含真实 shell 往返与退出码）；⏳ Linux 由 CI 验证 |
+| **M2** | writer 所有权收尾、`EIO→EOF` 归一化回归、阻塞/唤醒用例 | **Linux CI 上闭合 T2b**；`EIO→EOF` 在 linux/darwin 行为一致；`Fd()` 禁用规则有 lint 兜底 |
 | **M3** | Windows ConPTY：`CreateProcess` + attribute list + 双管道 + `Resize` | `windows-latest` 上能跑通 `cmd.exe`/`powershell` |
 | **M4** | `Command`/`LoginShell`/`Environ`（含注册表环境合并、`PATHEXT`）、`SpawnOption` | 与上游 `CommandBuilder` 行为逐项对照测试 |
 | **M5** | `serial`（串口），与 `System`/`Master` 抽象合流 | 能用 `System` 抽象打开串口 |
@@ -613,6 +666,17 @@ require golang.org/x/sys v0.41.0
 
 > 代价：比最新 x/sys 落后若干版本。日后若要跟进，必须重新核对 `go` 指令是否抬高了下限。
 
+### 10.4 M1 实现期的新发现
+
+| # | 发现 | 影响 |
+|---|---|---|
+| **T6** | **darwin 上，slave 从未打开过的 master，`TIOCSWINSZ`/`TIOCGWINSZ` 返回 `ENOTTY`** | 改写 D2：`OpenPty` 必须先打开并持有 slave（§3.8） |
+| **T7** | 子进程 stdio 之所以是阻塞的，依赖 `os/exec` 调用 `(*os.File).Fd()` 清掉 `O_NONBLOCK` | 已用 `TestChildStdioIsBlocking` 钉住（§3.9） |
+| **T8** | `syscall.SysProcAttr` 在 linux 与 darwin 上**都没有** `Umask` 字段；Go 无 `pre_exec` 等价物 | `WithUmask` 从 API 移除，成为对上游的能力缺口（D3、§6） |
+| **T9** | `unix.Syscall` 与 `syscall.Syscall` 在 darwin 上都能完成 PTY 的 ioctl | 一次性误判被实测否证，已回退到 `unix.Syscall`（§3.8 尾注） |
+
+**M1 实测结果（darwin/arm64，go1.24.0）**：13 个用例全部通过，含 `TestInteractiveShell`（真实 `/bin/sh` 往返：写入命令 → 读回 shell 计算出的 `marker-42` → 拿到退出码 3）、`TestKillReportsSignal`（SIGHUP）、`TestCloseWriteStopsWritesButKeepsReads`、`TestTermiosAndPgrp`、`TestChildStdioIsBlocking`。`go test -race` 通过；11 个目标平台 `build` + `vet` + `test -c` 全部通过。
+
 ---
 
 ## 11. 风险
@@ -667,6 +731,12 @@ require golang.org/x/sys v0.41.0
 | 15 | Windows ConPTY 序列 | 采用 `go-pty` / `hcsshim` 交叉确认的序列（§3.7） | 参照实现 |
 | 16 | CI | 两 job：三平台原生 `test` + 11 目标 `cross-compile`；`GOTOOLCHAIN: local` | 用户决定（§7.4） |
 | 17 | 仓库布局 | 采用 §7.3 草案；M0 先落接口与类型，实现留待 M1+ | 本文建议 |
+| 18 | `OpenPty` 是否打开 slave | **要打开并持有**，首次 `Spawn` 时交给子进程并关掉父进程副本 | 实测 T6（§3.8） |
+| 19 | BSD 平台 | **暂缓**，返回 `ErrUnsupported`；无 BSD CI 前不宣称支持 | 对用户原决定的修正（§7.1） |
+| 20 | `WithUmask` | **移除**：Go 无 `pre_exec`，`SysProcAttr` 亦无 `Umask` 字段 | 实测 T8（D3） |
+| 21 | `TryWait` 实现 | 后台 goroutine 调一次 `cmd.Wait()`，`TryWait` 非阻塞读取结果 | M1 实现 |
+| 22 | 克隆 killer 的语义 | 只发 SIGHUP，**不带**宽限期；与上游 `ProcessSignaller` 一致 | M1 实现 |
+| 23 | 信号名格式 | 用 `unix.SignalName`（`SIGHUP`），**刻意偏离**上游的 `strsignal`（受 locale 影响） | M1 实现 |
 
 ---
 

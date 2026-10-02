@@ -53,9 +53,6 @@ func TestSpawnOptionsDefault(t *testing.T) {
 	if !cfg.controllingTTY {
 		t.Error("controllingTTY should default to true")
 	}
-	if cfg.umask != nil {
-		t.Error("umask should default to nil")
-	}
 }
 
 func TestSpawnOptionsApplied(t *testing.T) {

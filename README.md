@@ -3,10 +3,12 @@
 A cross-platform pseudo-terminal (PTY) library for Go, ported from the Rust
 [`portable-pty`](https://github.com/wezterm/wezterm/tree/main/pty) crate.
 
-> **Status: pre-alpha.** Only the public interface and its types exist so far.
-> There is **no PTY implementation yet** — `System`, `Master`, `Child` and
-> `Killer` are interfaces without implementations. Do not depend on this
-> module yet. See [DESIGN.md](DESIGN.md) for the plan.
+> **Status: early.** Linux and macOS are implemented: open/close, window size,
+> spawning with a controlling terminal, exit status including signal names, and
+> a child that can be killed independently of `Wait`. Windows ConPTY and serial
+> ports are not written yet, and neither are the FreeBSD/OpenBSD/NetBSD paths —
+> `Native()` returns `ErrUnsupported` there. The API may still change.
+> See [DESIGN.md](DESIGN.md) for the plan.
 
 ## Design goals
 
@@ -26,18 +28,25 @@ report `ErrUnsupported`.
 
 | | [creack/pty](https://github.com/creack/pty) | [aymanbagabas/go-pty](https://github.com/aymanbagabas/go-pty) | this module |
 |---|---|---|---|
-| Unix PTY | ✅ | ✅ | planned |
+| Unix PTY | ✅ | ✅ | ✅ linux, darwin |
 | Windows ConPTY | ❌ | ✅ | planned |
-| Runtime-selectable PTY system | ❌ | ❌ | planned |
+| Runtime-selectable PTY system | ❌ | ❌ | ✅ |
 | Command builder | ❌ | ❌ | planned |
 | Exit status with signal name | ❌ | ❌ | ✅ |
-| Killer decoupled from `Wait` | ❌ | ❌ | planned |
+| Killer decoupled from `Wait` | ❌ | ❌ | ✅ |
+| Child stdio guaranteed blocking | — | — | ✅ asserted by test |
 | Serial ports | ❌ | ❌ | planned |
 | Dependencies | none | `x/sys`, `x/crypto/ssh` | `x/sys` only |
 
-`go-pty` already covers the Unix + ConPTY core, and is a reasonable choice
-today. This module exists to fill in the abstraction layer it omits, and to fix
-a correctness problem in the `creack/pty` lineage (see below).
+Relative to portable-pty there is one known gap: the Rust crate's
+`CommandBuilder::umask` has no Go equivalent, because `os/exec` offers no
+`pre_exec` hook and `syscall.SysProcAttr` has no `Umask` field on Linux or
+Darwin. See DESIGN.md D3 for why the available workarounds were rejected.
+
+`go-pty` already covers the Unix + ConPTY core, and is a reasonable choice if
+you need Windows today. This module exists to fill in the abstraction layer it
+omits, and to fix a correctness problem in the `creack/pty` lineage (see
+below).
 
 ## A note on handle handling
 

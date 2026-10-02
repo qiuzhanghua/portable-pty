@@ -1,9 +1,8 @@
-//go:build linux || darwin || freebsd || openbsd || netbsd
+//go:build linux || darwin
 
 package pty
 
 import (
-	"os"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -28,11 +27,4 @@ type UnixMaster interface {
 	// by every dup of the same open file description, and will degrade all
 	// handles of this PTY to blocking mode.
 	SyscallConn() (syscall.RawConn, error)
-}
-
-// WithUmask sets the umask applied in the child before it execs.
-//
-// This is Unix-only; the option has no effect on Windows.
-func WithUmask(mask os.FileMode) SpawnOption {
-	return func(c *spawnConfig) { c.umask = &mask }
 }
