@@ -518,9 +518,17 @@ serial.go             // M5
 其他约定：
 - `GOTOOLCHAIN: local` —— `go.mod` 是 Go 版本的唯一真相，禁止 CI 静默升级工具链；
 - `go-version-file: go.mod` —— CI 与 `go.mod` 自动同步；
-- 并发组 `cancel-in-progress` —— 同一 ref 的新推送取消旧运行。
+- 并发组 `cancel-in-progress` —— 同一 ref 的新推送取消旧运行；
+- **`.gitattributes` 强制 `eol=lf`** —— GitHub 的 Windows runner 上 `core.autocrlf` 默认为 `true`，没有这个文件时检出会把 LF 全转成 CRLF，`gofmt -l` 就会把**每一个** `.go` 文件都报成未格式化。**这不是理论风险：CI 首次运行就是这样挂在 `windows-latest` 的 `gofmt` 上（Linux/macOS 通过），并连带跳过了 Build/Vet/Test。**
 
-> **前置条件**：workspace 目前**不是 git 仓库**，且 `github.com/qiuzhanghua/portable-pty` 尚未创建。CI 要真正跑起来需要先 `git init` + 推到 GitHub。
+### 7.5 CI 首跑记录（2026-10-02）
+
+| 运行 | commit | 结果 |
+|---|---|---|
+| [#1](https://github.com/qiuzhanghua/portable-pty/actions/runs/36949000233) | `ecbf66c` | ❌ 13/14 —— `test (windows-latest)` 在 `gofmt` 步失败（CRLF，见 §7.4） |
+| [#2](https://github.com/qiuzhanghua/portable-pty/actions/runs/36949206815) | `6072454` | ✅ **14/14**（3 平台 test + 11 目标 cross-compile） |
+
+> 注意：首跑验证的是**管道本身**。`test` job 目前只跑 `ExitStatus` 等纯逻辑用例，**尚未验证任何 PTY 行为**。T2b（Linux `EIO`）与 T5（Windows ConPTY）要等 M1/M2 有真实实现后才会产生信号。
 
 ---
 
