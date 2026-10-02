@@ -67,6 +67,7 @@ func mergeRegistryEnv(env []string, root registry.Key, path string, skipUsername
 		return env
 	}
 
+	entries := make([]envEntry, 0, len(names))
 	for _, name := range names {
 		// portable-pty skips this one because the process environment already
 		// carries the right value.
@@ -85,13 +86,7 @@ func mergeRegistryEnv(env []string, root registry.Key, path string, skipUsername
 				value = expanded
 			}
 		}
-
-		if strings.EqualFold(name, "Path") {
-			if existing, ok := EnvGet(env, "Path"); ok && existing != "" {
-				value = existing + ";" + value
-			}
-		}
-		env = EnvSet(env, name, value)
+		entries = append(entries, envEntry{name: name, value: value})
 	}
-	return env
+	return mergeEnvEntries(env, entries)
 }

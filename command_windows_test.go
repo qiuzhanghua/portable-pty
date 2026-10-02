@@ -40,11 +40,14 @@ func TestEnvCaseInsensitiveOnWindows(t *testing.T) {
 }
 
 // CommandBuilder::get_base_env merges the machine environment from the
-// registry, so values absent from the process environment appear.
+// registry, so its Path is present in the merged Path.
+//
+// The comparison has to be against the *expanded* machine Path: the registry
+// stores Path as REG_EXPAND_SZ, and the merged value is expanded.
 func TestEnvironMergesMachineRegistry(t *testing.T) {
 	env := Environ()
 	if _, ok := EnvGet(env, "Path"); !ok {
-		t.Error("Environ() has no Path")
+		t.Fatal("Environ() has no Path")
 	}
 
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, machineEnvKey, registry.QUERY_VALUE)
@@ -53,51 +56,69 @@ func TestEnvironMergesMachineRegistry(t *testing.T) {
 	}
 	defer key.Close()
 
-	machinePath, _, err := key.GetStringValue("Path")
+	machinePath, valtype, err := key.GetStringValue("Path")
 	if err != nil || machinePath == "" {
 		t.Skipf("no machine Path in the registry: %v", err)
 	}
+	if valtype == registry.EXPAND_SZ {
+		expanded, err := registry.ExpandString(machinePath)
+		if err != nil {
+			t.Skipf("cannot expand the machine Path: %v", err)
+		}
+		machinePath = expanded
+	}
+
 	got, _ := EnvGet(env, "Path")
 	if !strings.Contains(got, machinePath) {
-		t.Errorf("Environ() Path does not contain the machine Path.\n got: %.200s\nwant substring: %.200s", got, machinePath)
+		t.Errorf("Environ() Path does not contain the machine Path")
+		t.Errorf("  got:  %.300s", got)
+		t.Errorf("  want: %.300s", machinePath)
 	}
 }
 
-// REG_EXPAND_SZ values are handed back expanded, as ExpandEnvironmentStringsW
-// does for portable-pty.
-func TestEnvironExpandsExpandString(t *testing.T) {
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE, machineEnvKey, registry.QUERY_VALUE)
-	if err != nil {
-		t.Skipf("registry unavailable: %v", err)
-	}
-	defer key.Close()
-
-	names, err := key.ReadValueNames(0)
-	if err != nil {
-		t.Skipf("cannot enumerate the machine environment: %v", err)
-	}
-
+// REG_EXPAND_SZ values must come back expanded.
+//
+// This asserts the property rather than comparing against
+// registry.ExpandString, which would only restate the implementation: no merged
+// value may still reference a variable that the merged environment defines.
+func TestEnvironHasNoUnexpandedReferences(t *testing.T) {
 	env := Environ()
-	checked := 0
-	for _, name := range names {
-		raw, valtype, err := key.GetStringValue(name)
-		if err != nil || valtype != registry.EXPAND_SZ {
+
+	inspected := 0
+	for _, kv := range env {
+		name, value, ok := strings.Cut(kv, "=")
+		if !ok || !strings.Contains(value, "%") {
 			continue
 		}
-		want, err := registry.ExpandString(raw)
-		if err != nil || want == raw {
-			continue // nothing actually changed, so this proves nothing
+		inspected++
+		for _, ref := range percentRefs(value) {
+			if _, defined := EnvGet(env, ref); !defined {
+				continue // cannot have been expanded from here anyway
+			}
+			t.Errorf("%s = %q still contains an unexpanded %%%s%%, and the environment defines %s",
+				name, value, ref, ref)
 		}
-		got, ok := EnvGet(env, name)
-		if !ok {
-			continue
-		}
-		if got != want {
-			t.Errorf("%s = %q, want the expanded form %q", name, got, want)
-		}
-		checked++
 	}
-	t.Logf("verified %d expanded value(s)", checked)
+	t.Logf("inspected %d value(s) containing a percent sign", inspected)
+}
+
+// percentRefs returns the %NAME% references in value.
+func percentRefs(value string) []string {
+	var refs []string
+	for {
+		_, rest, ok := strings.Cut(value, "%")
+		if !ok {
+			return refs
+		}
+		ref, after, ok := strings.Cut(rest, "%")
+		if !ok {
+			return refs
+		}
+		if ref != "" {
+			refs = append(refs, ref)
+		}
+		value = after
+	}
 }
 
 // portable-pty skips USERNAME during the machine pass so the process value
