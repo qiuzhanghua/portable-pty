@@ -577,7 +577,7 @@ serial.go             // M5
 其他约定：
 - `GOTOOLCHAIN: local` —— `go.mod` 是 Go 版本的唯一真相，禁止 CI 静默升级工具链；
 - `go-version-file: go.mod` —— CI 与 `go.mod` 自动同步；
-- 并发组 `cancel-in-progress` —— 同一 ref 的新推送取消旧运行；
+- 并发组 —— 分支上 `cancel-in-progress`，但 **main 上不取消**：被取消的运行虽然不是失败，却会被当作非成功上报（commit 挂着红叉，公开 badge 显示 cancelled 的那次）。运行 #15 就是这样被 #16 顶掉、badge 一度显示 failing 的；
 - **`.gitattributes` 强制 `eol=lf`** —— GitHub 的 Windows runner 上 `core.autocrlf` 默认为 `true`，没有这个文件时检出会把 LF 全转成 CRLF，`gofmt -l` 就会把**每一个** `.go` 文件都报成未格式化。**这不是理论风险：CI 首次运行就是这样挂在 `windows-latest` 的 `gofmt` 上（Linux/macOS 通过），并连带跳过了 Build/Vet/Test。**
 
 ### 7.5 CI 首跑记录（2026-10-02）

@@ -11,7 +11,12 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Do not supersede runs on main. A cancelled run is not a failure, but that is
+  # how it is reported: the commit keeps a red mark for a verdict that was never
+  # reached, and the public badge shows the cancelled run while its replacement
+  # is still going. Cancelling is the right default on branches, where the newer
+  # push is the only one that matters.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   # Never let the toolchain auto-upgrade behind our back: go.mod is the single
