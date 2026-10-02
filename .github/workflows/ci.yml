@@ -77,9 +77,16 @@ jobs:
           # This exists because diagnosing two windows-latest failures had to be
           # done by re-reading the code, and guessing is not a debugging method.
           if [ "$status" -ne 0 ]; then
-            detail=$(grep -E -- '--- FAIL|_test\.go:[0-9]+:|^panic:|FAIL[[:space:]]' "$RUNNER_TEMP/test.log" | head -12)
+            detail=$(grep -E -- '--- FAIL|_test\.go:[0-9]+:' "$RUNNER_TEMP/test.log" | head -12)
             if [ -z "$detail" ]; then
-              detail=$(tail -20 "$RUNNER_TEMP/test.log")
+              # No per-test line at all means the binary died instead of
+              # reporting: a crash or a timeout. The reason is at the head of
+              # the dump and the verdict at the tail, so show both.
+              detail=$(
+                head -20 "$RUNNER_TEMP/test.log"
+                echo '        ...'
+                tail -20 "$RUNNER_TEMP/test.log"
+              )
             fi
             printf '%s\n' "$detail" | while IFS= read -r line; do
               echo "::error::$line"

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 )
 
 // This file holds the platform-neutral half of Windows ConPTY: the handle
@@ -74,6 +75,14 @@ type conptyConsole struct {
 	console conpty
 	in      *os.File // write end: our input to the console
 	out     *os.File // read end: the console's output
+
+	// closeOnce makes Close idempotent, which matters more than it looks.
+	// ClosePseudoConsole on a handle that has already been closed is undefined
+	// behaviour and in practice takes the process down, and double-closing is
+	// easy to reach: a caller that closes explicitly and also defers a Close
+	// will do it every time.
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // newConPTY creates a pseudoconsole of the given size plus its two pipes.
@@ -165,8 +174,11 @@ func (c *conptyConsole) closeWrite() error {
 }
 
 func (c *conptyConsole) close() error {
-	c.console.close()
-	return errors.Join(closeIfOpen(c.in), closeIfOpen(c.out))
+	c.closeOnce.Do(func() {
+		c.console.close()
+		c.closeErr = errors.Join(closeIfOpen(c.in), closeIfOpen(c.out))
+	})
+	return c.closeErr
 }
 
 // closeIfOpen tolerates a file that an earlier CloseWrite already closed, which

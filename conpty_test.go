@@ -347,3 +347,32 @@ func TestConPTYResizeErrorIsWrapped(t *testing.T) {
 		t.Error("resize succeeded, want the failure reported")
 	}
 }
+
+// Closing twice must be harmless and must release the pseudoconsole exactly
+// once. ClosePseudoConsole on an already-closed handle is undefined behaviour,
+// and double-closing is easy to reach: a caller that closes explicitly and also
+// defers a Close does it every time.
+func TestConPTYCloseIsIdempotent(t *testing.T) {
+	host := &fakeConPTY{}
+	console, err := newConPTY(host, DefaultSize)
+	if err != nil {
+		t.Fatalf("newConPTY: %v", err)
+	}
+
+	if err := console.close(); err != nil {
+		t.Fatalf("first close: %v", err)
+	}
+	if err := console.close(); err != nil {
+		t.Errorf("second close = %v, want nil", err)
+	}
+
+	released := 0
+	for _, e := range host.events {
+		if e == "console.close" {
+			released++
+		}
+	}
+	if released != 1 {
+		t.Errorf("the pseudoconsole was released %d times, want exactly 1", released)
+	}
+}
