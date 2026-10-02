@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.2.1
+
+Documentation only. No API changes and no behaviour changes: the only new Go
+files are test files, which are not part of the built package.
+
+### Added
+
+- **Usage examples** at the front of the README — a command on a PTY, a bare
+  PTY, and a serial port. The same snippets live in [`example_test.go`](example_test.go)
+  and [`serial/example_test.go`](serial/example_test.go), where the compiler
+  checks them. They carry no `// Output:` comment, so the testing package
+  compiles them without running them: spawning a shell and printing a tty path
+  cannot produce stable output across platforms.
+- **DESIGN.md §10.9**, recording the `go.bug.st/serial` NetBSD gap: the exact
+  error, the two build tags behind it, a report ready to file upstream, and the
+  checklist for re-enabling NetBSD here once upstream fixes it.
+
+### Changed
+
+- The README is now bilingual, English first then Chinese, in a single file
+  rather than two that would drift apart.
+- Fixed a stale row in the comparison table: the command helpers have shipped
+  since M4, but the table still described them as planned.
+
 ## v0.2.0
 
 No API changes. The module now builds with older toolchains.
