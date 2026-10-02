@@ -12,6 +12,112 @@ A cross-platform pseudo-terminal (PTY) library for Go, ported from the Rust
 > them; other platforms return `ErrUnsupported`. The API may still change.
 > See [DESIGN.md](DESIGN.md) for what is and is not verified.
 
+## Usage
+
+```bash
+go get github.com/qiuzhanghua/portable-pty@latest
+```
+
+If `proxy.golang.org` is unreachable from where you are, point Go at a mirror
+first: `go env -w GOPROXY=https://goproxy.cn,direct`.
+
+### Run a command on a PTY
+
+```go
+package main
+
+import (
+	"fmt"
+	"io"
+	"os"
+
+	pty "github.com/qiuzhanghua/portable-pty"
+)
+
+func main() {
+	// Allocate a PTY.
+	m, err := pty.Native().OpenPty(pty.DefaultSize)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "open pty:", err)
+		os.Exit(1)
+	}
+	defer m.Close()
+
+	// Spawn a command on it; the PTY becomes its controlling terminal.
+	child, err := m.Spawn(pty.Command("sh", "-c", "printf 'the child sees '; tty"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "spawn:", err)
+		os.Exit(1)
+	}
+
+	// Drain the PTY while the child runs, the way a terminal would.
+	done := make(chan struct{})
+	go func() {
+		io.Copy(os.Stdout, m)
+		close(done)
+	}()
+
+	status, err := child.Wait()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "wait:", err)
+		os.Exit(1)
+	}
+	<-done
+
+	fmt.Printf("\n[%s]\n", status) // e.g. [Success]
+}
+```
+
+which prints something like
+
+```
+the child sees /dev/pts/3
+
+[Success]
+```
+
+### Just a PTY, no child
+
+```go
+m, err := pty.Native().OpenPty(pty.Size{Cols: 80, Rows: 24})
+if err != nil {
+	return err
+}
+defer m.Close()
+
+fmt.Println(m.Name()) // /dev/pts/3, /dev/ttys003, or "conpty" on Windows
+
+if err := m.Resize(pty.Size{Cols: 120, Rows: 40}); err != nil {
+	return err
+}
+```
+
+Pass `pty.DefaultSize` when you have nothing better: a zero `Size` really does
+ask for a 0x0 window, which upsets programs that query it.
+
+### A serial port
+
+A serial line is exposed as the same `pty.Master` interface, so code written
+against it works with either.
+
+```go
+import "github.com/qiuzhanghua/portable-pty/serial"
+
+port, err := serial.Open("/dev/ttyUSB0", serial.DefaultConfig()) // 9600 8N1
+if err != nil {
+	return err
+}
+defer port.Close()
+
+io.Copy(os.Stdout, port) // Read blocks until bytes arrive
+```
+
+`Spawn` reports `pty.ErrNoProcess` on a serial line, because there is no process
+behind it.
+
+The snippets above are compiled as examples in
+[`example_test.go`](example_test.go), and `go doc` shows the same API offline.
+
 ## Design goals
 
 - **Capability parity** with the Rust crate: runtime-selectable PTY system,
@@ -33,7 +139,7 @@ report `ErrUnsupported`.
 | Unix PTY | ✅ | ✅ | ✅ linux, darwin; ⚠️ BSDs implemented, unverified |
 | Windows ConPTY | ❌ | ✅ | ✅ |
 | Runtime-selectable PTY system | ❌ | ❌ | ✅ |
-| Command builder | ❌ | ❌ | planned |
+| Command helpers (`Command`, `LoginShell`, `Environ`) | ❌ | ❌ | ✅ |
 | Exit status with signal name | ❌ | ❌ | ✅ |
 | Killer decoupled from `Wait` | ❌ | ❌ | ✅ |
 | Child stdio guaranteed blocking | — | — | ✅ asserted by test |
