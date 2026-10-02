@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.2.0
+
+No API changes. The module now builds with older toolchains.
+
+### Changed
+
+- **The Go floor is 1.20 instead of 1.24**, and `golang.org/x/sys` is pinned to
+  v0.30.0 instead of v0.41.0. Neither dependency ever set that floor — x/sys
+  v0.30.0 declares Go 1.18 and `go.bug.st/serial` v1.6.4 declares 1.17 — so the
+  old floor came only from syntax this module had no need of: ranging over an
+  integer, and `slices.Equal`/`slices.Contains` in tests. Those are now two
+  small helpers and two ordinary loops.
+- CI runs its tests against the floor **and** the current release on each
+  platform. A job pinned to `go.mod` alone would from here on test only a
+  toolchain that is years past its upstream support window.
+
+### Notes
+
+- The ConPTY wrappers in x/sys are byte-identical between v0.30.0 and v0.41.0,
+  so the older dependency does not change Windows behaviour.
+- 1.20 is deliberately where this stops, rather than 1.18: Go 1.19 introduced
+  the `unix` build tag, and without it `env_other.go` — the js/plan9 stub — is
+  selected on Unix in place of `env_unix.go`. The package compiles and silently
+  loses `Shell`'s passwd fallback. See DESIGN.md §10.3 for the full ladder.
+
 ## v0.1.0
 
 First release. Everything below is new; the version is 0.x because the API may
