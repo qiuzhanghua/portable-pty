@@ -9,6 +9,10 @@ import (
 // ErrUnsupported is returned on platforms this package does not implement.
 var ErrUnsupported = errors.New("pty: unsupported platform")
 
+// ErrNoProcess is returned by Master.Spawn for implementations that have no
+// process to start, such as the serial package.
+var ErrNoProcess = errors.New("pty: no process to spawn")
+
 // Size describes the visible display area of a PTY.
 //
 // PixelWidth and PixelHeight are the dimensions of a single cell in pixels.
