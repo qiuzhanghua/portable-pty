@@ -1,3 +1,5 @@
+//go:build linux || darwin || freebsd || openbsd || windows || js
+
 package serial
 
 import (
@@ -12,14 +14,6 @@ import (
 
 // A serial system is a pty.System, which is the whole point of the abstraction.
 var _ pty.System = System("/dev/null", DefaultConfig())
-
-func TestDefaultConfigMatchesUpstream(t *testing.T) {
-	cfg := DefaultConfig()
-	want := Config{BaudRate: 9600, DataBits: 8, Parity: ParityNone, StopBits: StopBitsOne}
-	if cfg != want {
-		t.Errorf("DefaultConfig() = %+v, want %+v", cfg, want)
-	}
-}
 
 func TestOpenRejectsEmptyPort(t *testing.T) {
 	if _, err := Open("", DefaultConfig()); err == nil {

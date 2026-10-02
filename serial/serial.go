@@ -1,14 +1,5 @@
-// Package serial exposes a serial port as a pty.Master, so that a serial line
-// and a pseudo-terminal can be driven by the same code.
-//
-// It is a port of portable-pty's serial module. It lives in its own package
-// rather than in pty so that importing pty does not pull in a serial-port
-// dependency that most callers never need; Rust's crate layout cannot express
-// that, but Go's package layout can.
-//
-// A serial line has no process behind it, so Master.Spawn reports
-// pty.ErrNoProcess rather than inventing one. See DESIGN.md §10.7 for the
-// divergences from the original.
+//go:build linux || darwin || freebsd || openbsd || windows || js
+
 package serial
 
 import (
@@ -24,59 +15,19 @@ import (
 	"github.com/qiuzhanghua/portable-pty"
 )
 
+// The build constraint above mirrors what go.bug.st/serial actually implements,
+// plus js, where it compiles though a serial port is meaningless. netbsd,
+// dragonfly, solaris, aix, illumos and plan9 are not implemented by that
+// library; unsupported.go covers those, so that this package always exists and
+// reports pty.ErrUnsupported rather than vanishing and leaving an importer with
+// "build constraints exclude all Go files".
+
 // serialReadTimeout mirrors portable-pty. It has to be short: on Windows a long
 // read timeout blocks a concurrent write from making progress, which matters
 // when one goroutine is reading while another occasionally writes.
-const serialReadTimeout = 50 * time.Millisecond
-
-// Parity is a serial port's parity-checking mode.
-type Parity int
-
-const (
-	// ParityNone disables parity checking. This is portable-pty's default.
-	ParityNone Parity = iota
-	// ParityOdd enables odd parity.
-	ParityOdd
-	// ParityEven enables even parity.
-	ParityEven
-)
-
-// StopBits is the number of stop bits a serial port sends.
-type StopBits int
-
-const (
-	// StopBitsOne sends one stop bit. This is portable-pty's default.
-	StopBitsOne StopBits = iota
-	// StopBitsTwo sends two stop bits.
-	StopBitsTwo
-)
-
-// Config describes a serial port's line settings.
-type Config struct {
-	// BaudRate is the bit rate. Required.
-	BaudRate int
-	// DataBits is the character size: 5, 6, 7 or 8.
-	DataBits int
-	// Parity selects parity checking.
-	Parity Parity
-	// StopBits selects the number of stop bits.
-	StopBits StopBits
-}
-
-// DefaultConfig returns portable-pty's defaults: 9600 baud, 8 data bits, no
-// parity, one stop bit.
 //
-// portable-pty additionally defaults to XON/XOFF flow control. go.bug.st/serial
-// exposes no flow-control setting, so that cannot be reproduced and no
-// equivalent field exists here rather than one that silently does nothing.
-func DefaultConfig() Config {
-	return Config{
-		BaudRate: 9600,
-		DataBits: 8,
-		Parity:   ParityNone,
-		StopBits: StopBitsOne,
-	}
-}
+// There is no counterpart for writes: go.bug.st/serial offers no write timeout.
+const serialReadTimeout = 50 * time.Millisecond
 
 // System returns a pty.System that opens the named serial port.
 //
@@ -195,8 +146,7 @@ func (m *master) Size() (pty.Size, error) { return pty.DefaultSize, nil }
 // until the device errors, so that a removed USB adapter looks like a process
 // exiting. That is a liveness check wearing a process's clothes, and a caller
 // gets the same signal more directly by reading: a removed adapter makes Read
-// fail. Inventing a fake child would also make the error appear far from its
-// cause.
+// fail. Inventing a fake child would also put the error far from its cause.
 func (m *master) Spawn(*exec.Cmd, ...pty.SpawnOption) (pty.Child, error) {
 	return nil, fmt.Errorf("serial: %s: %w", m.name, pty.ErrNoProcess)
 }
