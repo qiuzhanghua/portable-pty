@@ -445,16 +445,17 @@ func WithControllingTTY(bool) SpawnOption
 
 // 上游 CommandBuilder 的 umask 无法在 Go 中实现，故不提供（见 D3）。
 
-// ---------- 命令辅助（替代 CommandBuilder） ----------
+// ---------- 命令辅助（替代 CommandBuilder，M4 已实现） ----------
 
-// Command 构造 *exec.Cmd，并预置 base env 快照。
-func Command(name string, args ...string) *exec.Cmd
+func Command(name string, args ...string) *exec.Cmd // CommandBuilder::new
+func LoginShell() *exec.Cmd                         // new_default_prog；Unix 上 argv0 = "-bash"
+func Environ() []string                             // get_base_env（Windows 含注册表合并）
+func Shell() string                                 // get_shell
+func HomeDir() (string, error)                      // get_home_dir
 
-// LoginShell 构造默认登录 shell，argv0 形如 "-bash"。
-func LoginShell() *exec.Cmd
-
-// Environ 返回 base env 快照；Windows 上包含注册表环境合并。
-func Environ() []string
+func EnvGet(env []string, key string) (string, bool)  // get_env
+func EnvSet(env []string, key, value string) []string // env
+func EnvUnset(env []string, key string) []string      // env_remove
 ```
 
 ### Unix 专属能力（build tag 隔离）
@@ -504,7 +505,7 @@ type WindowsMaster interface {
 | `ChildKiller::kill` | `Killer.Kill`（含 SIGHUP→宽限→强杀） | ✅ |
 | `ChildKiller::clone_killer` | `Killer.CloneKiller` | ✅ |
 | `ExitStatus` | `ExitStatus` | ✅ |
-| `CommandBuilder` | `Command`/`LoginShell`/`Environ` + `SpawnOption` | ✅ 能力覆盖 |
+| `CommandBuilder` | `Command`/`LoginShell`/`Environ`/`Shell`/`HomeDir` + `Env*` + `SpawnOption` | ⚠️ 除 `umask`（Go 做不到）与 `PATHEXT`（交给 `exec.LookPath`） |
 | `serial` | M5 实现 | ✅ 计划内 |
 | `winpty` 回退 | 不做 | ❌ 非目标 |
 | `Downcast` | 不做 | ❌ 非目标 |
@@ -538,7 +539,12 @@ type WindowsMaster interface {
 
 ```
 pty.go                // Size / ExitStatus / System / Master / Child / Killer / Native
-cmd.go                // Command / LoginShell / Environ / SpawnOption
+command.go            // Command / LoginShell / Environ / HomeDir / Env*
+env_unix.go           // //go:build unix —— Shell / baseEnviron / passwdShell
+env_windows.go        // //go:build windows —— ComSpec + 注册表环境合并
+env_other.go          // //go:build !unix && !windows —— 让 js/wasm、plan9 也能编译
+envmerge.go           // 合并策略（平台中立，便于在任意平台测试）
+spawn.go              // SpawnOption
 system_unix.go        // //go:build unix —— UnixSystem.OpenPty
 system_windows.go     // //go:build windows —— ConPtySystem.OpenPty + 可用性探测
 master_unix.go        // openpt/grantpt/unlockpt/ptsname、Resize/Size/Termios/Pgrp
@@ -607,7 +613,7 @@ serial.go             // M5
 | **M1** | Unix：`OpenPty`/`Close`、`Size`/`Resize`、`Spawn`、`ExitStatus`、`Child`/`Killer` | ✅ **完成**：13 用例在 darwin（本地）与 linux（CI 运行 #5）全部通过，含真实 shell 往返与退出码；-race 与 11 平台交叉编译亦通过 |
 | **M2** | writer 所有权收尾、`EIO→EOF` 归一化回归、阻塞/唤醒用例 | **Linux CI 上闭合 T2b**；`EIO→EOF` 在 linux/darwin 行为一致；`Fd()` 禁用规则有 lint 兜底 |
 | **M3** | Windows ConPTY：`CreateProcess` + attribute list + 双管道 + `Resize` | `windows-latest` 上能跑通 `cmd.exe`/`powershell` |
-| **M4** | `Command`/`LoginShell`/`Environ`（含注册表环境合并、`PATHEXT`）、`SpawnOption` | 与上游 `CommandBuilder` 行为逐项对照测试 |
+| **M4** | `Command`/`LoginShell`/`Environ`/`Shell`/`HomeDir`/`Env*`、Windows 注册表环境合并、`SpawnOption` | ✅ **完成**：29 个用例在 darwin（本地）、linux 与 windows（CI 运行 #9）全部通过。`PATHEXT` 未自行实现：`exec.LookPath` 在 Windows 上已经处理扩展名（见 §10.5）。`umask` 见 D3，属客观缺口 |
 | **M5** | `serial`（串口），与 `System`/`Master` 抽象合流 | 能用 `System` 抽象打开串口 |
 | **M6** | 文档、README（含与 Rust crate / go-pty 的关系说明）、API 对照表 | 可发布 |
 
@@ -679,6 +685,27 @@ require golang.org/x/sys v0.41.0
 
 > **M1 因此是第一个在真实 Linux 上验证过的里程碑**，不再是「只在 darwin 上看起来对」。
 
+### 10.5 M4 实现期的新发现
+
+| # | 发现 | 影响 |
+|---|---|---|
+| **T10** | Windows 的注册表环境合并**无法在本机验证**，而运行 #8 在 `windows-latest` 上的失败又读不到日志（需要鉴权） | 把合并策略从 `env_windows.go` 抽到平台中立的 `envmerge.go`，用自带的 case-fold 查找取代平台相关的 `Env*`，使策略在**任意平台**行为一致、可被 linux/darwin 的 CI 覆盖。现在只剩「读注册表」这一步是 Windows 独有的 |
+| **T11** | 运行 #8 失败的真正原因：测试拿 `GetStringValue` 返回的**未展开**值去比对。HKLM 的 `Path` 是 `REG_EXPAND_SZ`，而合并后的值是展开过的 | 修正断言；`EXPAND_SZ` 的用例同时还有第二个缺陷 —— `TEMP`/`TMP` 在 HKLM 与 HKCU 都存在，HKCU 合法胜出，拿 HKLM 的值比对必然错 |
+| **T12** | `exec.LookPath` 在 Windows 上**已经**处理 `PATHEXT` 扩展名 | `PATHEXT` 无需自行实现，但要注意它用的是**进程**的 `PATH`，而非 `cmd.Env` 里的 `PATH`（上游用的是后者的语义）。这是一处待记录的语义差异 |
+| **T13** | `actions/checkout@v4` / `setup-go@v5` 被强制迁离 Node 20，每次运行都告警 | 已升到 **v7** |
+
+**M4 实测结果**（用例数按平台如实统计，共声明 45 个）：
+
+| 平台 | 运行 | 通过 | 跳过 |
+|---|---|---|---|
+| darwin/arm64（本地） | 39 | 38 | 1（macOS 账号不在 `/etc/passwd`，见下） |
+| linux/amd64（CI #9） | 39 | 39 | 0 |
+| windows/amd64（CI #9） | 25 | 25 | 0 |
+
+Windows 上真正执行到的包括注册表环境合并、`Path` 拼接、`EXPAND_SZ` 展开、`USERNAME` 保留与大小写不敏感键匹配。darwin 上那个跳过恰好**印证**了 §10.5 记录的 `passwdShell` 局限：本机账号确实不在 `/etc/passwd` 里。
+
+**一处刻意的语义偏离（`Dir` 默认值）**：`Command()` / `LoginShell()` 把 `Dir` 默认设为 home，与上游一致；但上游在配置的 cwd **不存在**时会**静默改用 home**，本包不做这件事 —— 隐藏一个坏路径只是把失败推后。非法的 `cmd.Dir` 会让 `Spawn` 直接返回 chdir 错误。
+
 ---
 
 ## 11. 风险
@@ -739,6 +766,11 @@ require golang.org/x/sys v0.41.0
 | 21 | `TryWait` 实现 | 后台 goroutine 调一次 `cmd.Wait()`，`TryWait` 非阻塞读取结果 | M1 实现 |
 | 22 | 克隆 killer 的语义 | 只发 SIGHUP，**不带**宽限期；与上游 `ProcessSignaller` 一致 | M1 实现 |
 | 23 | 信号名格式 | 用 `unix.SignalName`（`SIGHUP`），**刻意偏离**上游的 `strsignal`（受 locale 影响） | M1 实现 |
+| 24 | `Command`/`LoginShell` 的 `Dir` | 默认 home（忠实上游）；但**不**复刻上游「cwd 不存在就静默改用 home」 | M4 实现 |
+| 25 | `PATHEXT` | 交给 `exec.LookPath`，不自行实现；注意它读进程 `PATH` 而非 `cmd.Env` | M4 发现（T12） |
+| 26 | `passwdShell` | 自行解析 `/etc/passwd`（`os/user` 不暴露 `pw_shell`）；macOS 上通常查不到而回退 `/bin/sh` | M4 实现 |
+| 27 | `isExecutable` | 用 mode 位而非 `access(2)`，以免 `//go:build unix` 引入平台相关 syscall | M4 实现 |
+| 28 | 合并策略的位置 | 抽到平台中立的 `envmerge.go`，让 Windows 逻辑也能在 linux/darwin CI 上被测 | M4 发现（T10） |
 
 ---
 
