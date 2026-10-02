@@ -675,7 +675,7 @@ require golang.org/x/sys v0.41.0
 | **T8** | `syscall.SysProcAttr` 在 linux 与 darwin 上**都没有** `Umask` 字段；Go 无 `pre_exec` 等价物 | `WithUmask` 从 API 移除，成为对上游的能力缺口（D3、§6） |
 | **T9** | `unix.Syscall` 与 `syscall.Syscall` 在 darwin 上都能完成 PTY 的 ioctl | 一次性误判被实测否证，已回退到 `unix.Syscall`（§3.8 尾注） |
 
-**M1 实测结果**：13 个用例在 **darwin/arm64（本地，go1.24.0）** 与 **linux/amd64（CI 运行 #5 的 `ubuntu-latest`）** 上全部通过，含 `TestInteractiveShell`（真实 `/bin/sh` 往返：写入命令 → 读回 shell 计算出的 `marker-42` → 拿到退出码 3）、`TestKillReportsSignal`（SIGHUP）、`TestCloseWriteStopsWritesButKeepsReads`、`TestTermiosAndPgrp`、`TestChildStdioIsBlocking`。两平台 `go test -race` 均通过；11 个目标平台 `build` + `vet` + `test -c` 全部通过。
+**M1 实测结果**：14 个用例（9 个真实 PTY 用例 + 5 个纯逻辑用例）在 **darwin/arm64（本地，go1.24.0）** 与 **linux/amd64（CI 运行 #5 的 `ubuntu-latest`）** 上全部通过，含 `TestInteractiveShell`（真实 `/bin/sh` 往返：写入命令 → 读回 shell 计算出的 `marker-42` → 拿到退出码 3）、`TestKillReportsSignal`（SIGHUP）、`TestCloseWriteStopsWritesButKeepsReads`、`TestTermiosAndPgrp`、`TestChildStdioIsBlocking`。两平台 `go test -race` 均通过；11 个目标平台 `build` + `vet` + `test -c` 全部通过。
 
 > **M1 因此是第一个在真实 Linux 上验证过的里程碑**，不再是「只在 darwin 上看起来对」。
 
