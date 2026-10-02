@@ -37,6 +37,12 @@ type System interface {
 //
 // Reading yields output produced by the slave; writing feeds input to it.
 // A Master is safe for concurrent use.
+//
+// Detecting that the session is over differs by platform, and callers should
+// not assume the Unix behaviour everywhere. On Unix, reads return io.EOF once
+// every slave handle is gone. A ConPTY, by contrast, keeps the console's output
+// pipe open until the pseudoconsole itself is closed, so on Windows the
+// reliable signal that the child finished is Child.Wait returning, not EOF.
 type Master interface {
 	io.ReadWriteCloser
 
@@ -67,6 +73,11 @@ type Master interface {
 	// to a ConPTY (golang/go#62708); as a result cmd.Process, cmd.ProcessState,
 	// cmd.Cancel and cmd.WaitDelay are not populated by the standard library,
 	// and the returned Child must be used to wait for the process instead.
+	//
+	// The child's standard streams are platform-dependent. On Unix the slave
+	// fills in whichever of cmd.Stdin, cmd.Stdout and cmd.Stderr the caller
+	// left unset, and the caller's own files are honoured. On Windows the
+	// pseudoconsole supplies all three, so any the caller set are ignored.
 	Spawn(cmd *exec.Cmd, opts ...SpawnOption) (Child, error)
 }
 
