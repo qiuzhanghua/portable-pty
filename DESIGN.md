@@ -519,19 +519,38 @@ type WindowsMaster interface {
 
 ### 7.1 目标平台
 
-| 平台 | 状态（M1 之后） |
-|---|---|
-| linux | ✅ 已实现 |
-| darwin | ✅ 已实现（主要开发与验证平台） |
-| windows | ✅ 已实现（ConPTY，Win10 1809 / build 17763+） |
-| freebsd / openbsd / netbsd | ⏸ **暂缓**，返回 `ErrUnsupported` |
-| 其他 Unix（solaris、illumos、aix、zos…） | `ErrUnsupported` |
+| 平台 | 状态 | CI 真的跑测试吗 |
+|---|---|---|
+| linux | ✅ 已实现并验证 | 是 |
+| darwin | ✅ 已实现并验证（主要开发平台） | 是 |
+| windows | ✅ 已实现并验证（ConPTY，Win10 1809 / build 17763+） | 是 |
+| freebsd | ⚠️ **已实现，但未验证** | 否（只交叉编译） |
+| openbsd | ⚠️ **已实现，但未验证** | 否（只交叉编译） |
+| netbsd | ⚠️ **已实现，但未验证** | 否（只交叉编译） |
+| 其他 Unix（solaris、illumos、aix、zos…） | `ErrUnsupported` | 只交叉编译 |
 
-**为什么 BSD 被暂缓（对用户原决定的修正）**：三个 BSD 各有一套互不相同的 open/grant/unlock 序列 —— freebsd 走 `posix_openpt` + `FIODGNAME`；openbsd 只有一个 `/dev/ptm` + `PTMGET`，一次 ioctl 同时返回两端 fd；netbsd 才是 `/dev/ptmx` + `TIOCPTSNAME` + `TIOCGRANTPT`。而且它们取到的都是**裸 fd**，要进 netpoller 必须先自己 `SetNonblock` 再 `os.NewFile`（§3.5 第 2 条）。
+**三个 BSD 的实现方式各不相同**（这是真实差异，不是设计选择）：
 
-本项目**没有任何 BSD CI**（cross-compile 只能证明能编译，不能证明能跑）。把无法验证的代码标成「支持」是负债，不是能力。因此 M1 只交付能真实验证的平台，BSD 留待有验证手段时再补；`cross-compile` 矩阵仍保留它们，确保至少编译不被破坏。
+| | 打开 master | 取 slave 名字 | grant / unlock |
+|---|---|---|---|
+| freebsd | `posix_openpt(2)`（无 `/dev/ptmx`） | `TIOCPTMASTER` 确认 + `FIODGNAME` 取名字 | 都不需要 |
+| openbsd | 打开 `/dev/ptm` 这个 clone 设备 | 名字随 `PTMGET` 一起返回 | 都不用 |
+| netbsd | `/dev/ptmx` | `TIOCPTSNAME`（填 `ptmget.Sn`） | `TIOCGRANTPT`；unlock 是 no-op |
 
-构建约束相应收紧为 `//go:build linux || darwin`，其余平台一律 `ErrUnsupported`。
+另外：freebsd/openbsd 拿到的是**裸 fd**，必须自己 `SetNonblock` 后再 `os.NewFile`，否则进不了 netpoller（§3.5 第 2 条）—— 见 `nonblockingFile`。openbsd 的 `PTMGET` **一次返回两端 fd**，所以那一个 slave 直接用，不再按名字重开。netbsd 可以用 x/sys 已经导出的 `unix.Ptmget` / `unix.IoctlGetPtmget`，freebsd/openbsd 的结构体与 ioctl 号则要自己来。
+
+**关于「未验证」的确切含义**（用户已明确接受）：GitHub 托管的 runner 里没有 BSD，因此交叉编译只能证明**能编译**，不能证明**能跑**。每处 `open_*.go` 的 Godoc 都写了 `UNVERIFIED`，上表也如实标注。
+
+**但风险最高的那部分已经被验证了。** BSD 代码里最容易悄悄写错的是两样东西：参数结构体的**内存布局**，以及由布局大小推出的 **`_IOC` 请求号**（写错只会得到一个内核不认的号，而且只在真机上才暴露）。这两样都是平台无关的纯数据，因此被放进**没有构建约束**的 `bsd_ioctl.go`，并由 `bsd_ioctl_test.go` 在**每个平台**上断言：
+
+- `sizeof(ptmget) == 40` 且偏移为 8 / 24；
+- `ioR('t', 1, sizeof(ptmget)) == 0x40287401` —— 正好等于参考实现硬编码的 OpenBSD `PTMGET`；
+- `ioW('f', 120, sizeof(fiodgnameArg))` 在 64 位下等于 `0x80106678`；
+- 两者都远小于 `_IOC` 的 13 位长度掩码。
+
+也就是说：**能在这里检验的部分都检验了**，剩下真正无法检验的只有「内核是否接受」这一步。
+
+核心构建约束为 `//go:build linux || darwin || freebsd || openbsd || netbsd`，其余平台一律 `ErrUnsupported`。
 
 子包 `serial` 另有约束：`go.bug.st/serial` **只实现 linux/darwin/freebsd/openbsd/windows**（js 可编译）。在其余平台（含 **netbsd**）该子包由 `unsupported.go` 接管，`Open` 返回 `ErrUnsupported` —— 包始终存在且始终可编译，不会让调用方撞上「build constraints exclude all Go files」。见 §10.7 T19–T21。
 
@@ -766,6 +785,29 @@ Windows 上真正执行到的包括注册表环境合并、`Path` 拼接、`EXPA
 
 ---
 
+### 10.8 BSD 支持：哪些验证了，哪些没有
+
+用户在知情的前提下接受了「未验证的 BSD 实现」。为避免「支持」二字被过度解读，这里把边界写清楚。
+
+**已验证（在每个平台的 CI 上跑）：**
+
+| 检查 | 方式 |
+|---|---|
+| `ptmget` 布局：大小 40，`Cn` 偏移 8，`Sn` 偏移 24 | `bsd_ioctl_test.go` |
+| `fiodgnameArg` 布局：64 位 16 字节、32 位 12 字节 | 同上 |
+| `ioR('t', 1, sizeof(ptmget)) == 0x40287401`（参考实现硬编码的 OpenBSD PTMGET） | 同上 |
+| `ioW('f', 120, sizeof(fiodgnameArg)) == 0x80106678`（64 位） | 同上 |
+| 三个 BSD（amd64 / arm64 / 386）能 build、vet，且测试二进制能编译 | cross-compile 矩阵 |
+
+**未验证（无法验证）：** 三个 BSD 上内核是否真的接受这些 ioctl、`openMaster` 的时序是否正确、`Spawn` 出来的子进程是否真的拿到控制终端。这需要真实 BSD 机器；GitHub 托管的 runner 里没有。愿意验证的人可以在 BSD 上跑 `go test ./...` —— 测试文件的构建约束已包含这三个平台，正是为此。
+
+**由工具而非推导得出的两个细节：**
+
+1. **`_IOC` 请求号是算出来的，不是抄来的。** 它编码了参数结构体的大小，32/64 位不同。把布局与算术移出构建约束后，测试能在 darwin 上确认算出来的数**等于**参考实现硬编码的值，这就把「抄错一位十六进制」这类错误挡在了外面。
+2. **`SPECNAMELEN` 的架构差异被规避了。** freebsd 的 `FIODGNAME` 需要一个名字缓冲区，而 `SPECNAMELEN` 在多数架构是 `0x3f`、arm64 是 `0xff`。实现里用一个足够大的固定缓冲区，不去关心它 —— 内核只写名字实际需要的字节数。
+
+---
+
 ## 11. 风险
 
 | 风险 | 影响 | 缓解 |
@@ -837,6 +879,8 @@ Windows 上真正执行到的包括注册表环境合并、`Path` 拼接、`EXPA
 | 34 | 串口的位置 | 独立子包 `serial`，使核心 `pty` 保持「只依赖 x/sys」 | M5 决定（T24） |
 | 35 | 串口的 `Spawn` | 返回 `pty.ErrNoProcess`，**不**复刻上游那个轮询 carrier detect 的假 Child | M5 决定 |
 | 36 | Go 版本下限 | **维持 `go 1.24`**：曾考虑为 netbsd 升到 1.25，实测 `serial` v1.8.0 同样不支持 netbsd，升级换不到任何东西（T20） | M5 实测 |
+| 37 | 三个 BSD | **实现**，接受未验证；每处 Godoc 标 `UNVERIFIED`，§7.1 如实标注（用户决定） | 用户决定 |
+| 38 | BSD 的布局与 `_IOC` 算术 | 移出构建约束，使风险最高的部分能在**每个平台**被测试 | §10.8 |
 
 ---
 

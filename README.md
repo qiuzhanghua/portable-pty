@@ -7,10 +7,10 @@ A cross-platform pseudo-terminal (PTY) library for Go, ported from the Rust
 > window size, spawning with a controlling terminal, exit status, and a child
 > that can be killed independently of `Wait`. The command helpers
 > (`Command`, `LoginShell`, `Environ`) work on every platform, and the `serial`
-> subpackage exposes a serial port as a `pty.Master`. The FreeBSD/OpenBSD/NetBSD
-> pseudo-terminal paths are not written yet — `Native()` returns
-> `ErrUnsupported` there. The API may still change.
-> See [DESIGN.md](DESIGN.md) for the plan.
+> subpackage exposes a serial port as a `pty.Master`. FreeBSD, OpenBSD and
+> NetBSD are implemented but **unverified**, because no CI runner exists for
+> them; other platforms return `ErrUnsupported`. The API may still change.
+> See [DESIGN.md](DESIGN.md) for what is and is not verified.
 
 ## Design goals
 
@@ -30,7 +30,7 @@ report `ErrUnsupported`.
 
 | | [creack/pty](https://github.com/creack/pty) | [aymanbagabas/go-pty](https://github.com/aymanbagabas/go-pty) | this module |
 |---|---|---|---|
-| Unix PTY | ✅ | ✅ | ✅ linux, darwin |
+| Unix PTY | ✅ | ✅ | ✅ linux, darwin; ⚠️ BSDs implemented, unverified |
 | Windows ConPTY | ❌ | ✅ | ✅ |
 | Runtime-selectable PTY system | ❌ | ❌ | ✅ |
 | Command builder | ❌ | ❌ | planned |
@@ -65,6 +65,19 @@ For the same reason, do **not** call `(*os.File).Fd()` on a PTY master. `Fd`
 clears `O_NONBLOCK`, which is shared by every `dup` of the same open file
 description, so one call silently degrades all handles of that PTY. Use
 `SyscallConn()` instead.
+
+## Platform support
+
+| | Verified by CI |
+|---|---|
+| Linux, macOS, Windows | ✅ tests run on every push |
+| FreeBSD, OpenBSD, NetBSD | ⚠️ compiled only — implemented, never executed |
+| Anything else | `Native()` returns `ErrUnsupported` |
+
+The BSD implementations are honest about this: each says `UNVERIFIED` in its
+documentation, and the parts that *can* be checked without the hardware — the
+argument struct layouts and the `_IOC` request numbers derived from them — are
+checked on every platform. See DESIGN.md §10.8.
 
 ## Requirements
 

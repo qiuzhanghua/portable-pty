@@ -1,4 +1,4 @@
-//go:build linux || darwin
+//go:build linux || darwin || freebsd || openbsd || netbsd
 
 package pty
 
@@ -210,4 +210,59 @@ func ioctlPointer(f *os.File, req uint, arg unsafe.Pointer) error {
 func ioctlZero(f *os.File, req uint) error {
 	var zero int32
 	return ioctlPointer(f, req, unsafe.Pointer(&zero))
+}
+
+// ioctlSetPointerInt issues an ioctl whose argument is a pointer to an int.
+func ioctlSetPointerInt(f *os.File, req uint, value int) error {
+	return controlFile(f, func(fd uintptr) error {
+		return unix.IoctlSetPointerInt(int(fd), req, value)
+	})
+}
+
+// ioctlNone issues an ioctl that takes no argument.
+func ioctlNone(f *os.File, req uint) error {
+	return controlFile(f, func(fd uintptr) error {
+		if _, _, errno := unix.Syscall(unix.SYS_IOCTL, fd, uintptr(req), 0); errno != 0 {
+			return errno
+		}
+		return nil
+	})
+}
+
+// cString returns the NUL-terminated string at the start of buf.
+func cString(buf []byte) string {
+	for i, c := range buf {
+		if c == 0 {
+			return string(buf[:i])
+		}
+	}
+	return string(buf)
+}
+
+// openedPty is what opening a pseudo-terminal produces.
+type openedPty struct {
+	// master is the controlling end.
+	master *os.File
+	// slaveName is the device path of the other end.
+	slaveName string
+	// slave is set only where the kernel hands both ends over at once, which
+	// OpenBSD's PTMGET does. Reopening the slave by name there would be
+	// wasteful, and would briefly leave the terminal with no slave at all.
+	slave *os.File
+}
+
+// nonblockingFile wraps a raw descriptor that the Go runtime does not know
+// about yet.
+//
+// The descriptor must already be non-blocking: os.NewFile only registers a file
+// with the netpoller when it finds O_NONBLOCK set, and a descriptor from
+// posix_openpt or PTMGET arrives blocking. Without this, reads on such a master
+// would pin an OS thread and Close would not wake them — the very problem
+// DESIGN.md §3.5 exists to avoid.
+func nonblockingFile(fd int, name string) (*os.File, error) {
+	if err := unix.SetNonblock(fd, true); err != nil {
+		unix.Close(fd)
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), name), nil
 }

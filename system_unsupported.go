@@ -1,13 +1,12 @@
-//go:build !linux && !darwin && !windows
+//go:build !linux && !darwin && !freebsd && !openbsd && !netbsd && !windows
 
 package pty
 
 // Native returns a System whose OpenPty always fails with ErrUnsupported.
 //
-// freebsd, openbsd, netbsd, solaris, aix and every other GOOS land here for
-// now. See DESIGN.md §7 for what is planned and why the BSDs are not claimed
-// yet: they need per-OS open/grant/unlock sequences, and this project has no
-// way to test them.
+// solaris, aix, illumos and every other GOOS land here. See DESIGN.md §7.1:
+// the three BSDs are implemented but unverified, and this package reports them
+// as unsupported nowhere — they are simply not this file's business any more.
 func Native() System { return unsupportedSystem{} }
 
 type unsupportedSystem struct{}
