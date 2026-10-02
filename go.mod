@@ -1,6 +1,6 @@
 module github.com/qiuzhanghua/portable-pty
 
-go 1.22.0
+go 1.20
 
 require (
 	// v1.7.0 and later require go >= 1.25; v1.6.4 is the newest that does not.

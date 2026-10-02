@@ -1,7 +1,6 @@
 package pty
 
 import (
-	"slices"
 	"testing"
 )
 
@@ -16,14 +15,14 @@ func TestMergeEnvEntriesReplacesLaterValues(t *testing.T) {
 		{name: "A", value: "machine"},
 		{name: "A", value: "user"},
 	})
-	if want := []string{"A=user", "B=keep"}; !slices.Equal(got, want) {
+	if want := []string{"A=user", "B=keep"}; !equalStrings(got, want) {
 		t.Errorf("mergeEnvEntries = %v, want %v", got, want)
 	}
 }
 
 func TestMergeEnvEntriesAddsNewNames(t *testing.T) {
 	got := mergeEnvEntries([]string{"A=1"}, []envEntry{{name: "B", value: "2"}})
-	if want := []string{"A=1", "B=2"}; !slices.Equal(got, want) {
+	if want := []string{"A=1", "B=2"}; !equalStrings(got, want) {
 		t.Errorf("mergeEnvEntries = %v, want %v", got, want)
 	}
 }
@@ -31,7 +30,7 @@ func TestMergeEnvEntriesAddsNewNames(t *testing.T) {
 func TestMergeEnvEntriesMatchesNamesCaseInsensitively(t *testing.T) {
 	got := mergeEnvEntries([]string{"Path=process"}, []envEntry{{name: "PATH", value: "machine"}})
 	want := []string{"PATH=process;machine"}
-	if !slices.Equal(got, want) {
+	if !equalStrings(got, want) {
 		t.Errorf("mergeEnvEntries = %v, want %v", got, want)
 	}
 }
@@ -47,14 +46,14 @@ func TestMergeEnvEntriesAppendsPath(t *testing.T) {
 		},
 	)
 	want := []string{"Path=C:\\process;C:\\machine;C:\\user"}
-	if !slices.Equal(got, want) {
+	if !equalStrings(got, want) {
 		t.Errorf("mergeEnvEntries = %v, want %v", got, want)
 	}
 }
 
 func TestMergeEnvEntriesPathWhenAbsent(t *testing.T) {
 	got := mergeEnvEntries(nil, []envEntry{{name: "Path", value: "C:\\machine"}})
-	if want := []string{"Path=C:\\machine"}; !slices.Equal(got, want) {
+	if want := []string{"Path=C:\\machine"}; !equalStrings(got, want) {
 		t.Errorf("mergeEnvEntries = %v, want %v", got, want)
 	}
 }
@@ -62,14 +61,14 @@ func TestMergeEnvEntriesPathWhenAbsent(t *testing.T) {
 // An empty existing Path must not produce a leading separator.
 func TestMergeEnvEntriesEmptyPath(t *testing.T) {
 	got := mergeEnvEntries([]string{"Path="}, []envEntry{{name: "Path", value: "C:\\machine"}})
-	if want := []string{"Path=C:\\machine"}; !slices.Equal(got, want) {
+	if want := []string{"Path=C:\\machine"}; !equalStrings(got, want) {
 		t.Errorf("mergeEnvEntries = %v, want %v", got, want)
 	}
 }
 
 func TestMergeEnvEntriesIgnoresNamesDifferingBeyondPath(t *testing.T) {
 	got := mergeEnvEntries([]string{"TEMP=C:\\process"}, []envEntry{{name: "TEMP", value: "C:\\machine"}})
-	if want := []string{"TEMP=C:\\machine"}; !slices.Equal(got, want) {
+	if want := []string{"TEMP=C:\\machine"}; !equalStrings(got, want) {
 		t.Errorf("mergeEnvEntries = %v, want %v", got, want)
 	}
 }

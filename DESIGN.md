@@ -599,7 +599,7 @@ serial/               // M5 子包：config.go(类型，无依赖) / serial.go(�
 
 其他约定：
 - `GOTOOLCHAIN: local` —— `go.mod` 是 Go 版本的唯一真相，禁止 CI 静默升级工具链；
-- **`test` 跑两个 Go 版本**：`go.mod` 声明的是**下限**（必须一直能编的、最老的工具链），而只测下限就等于再也不测任何受支持的版本 —— Go 1.22 早已 EOL。所以最新版与下限同时测；
+- **`test` 跑两个 Go 版本**：`go.mod` 声明的是**下限**（必须一直能编的、最老的工具链），而只测下限就等于再也不测任何受支持的版本 —— Go 1.20 早已 EOL。所以最新版与下限同时测；
 - **`cross-compile` 只跑下限**：构建约束与 Go 版本无关，而「最老的工具链配当前锁定的 `x/sys` 是否覆盖每个目标」恰恰与版本有关；
 - `go mod tidy` 的差分检查只在 **Linux + 下限**上做 —— committed 的 `go.sum` 正是用那个版本整理的，更新的工具链允许有不同想法；
 - 并发组 —— 分支上 `cancel-in-progress`，但 **main 上不取消**：被取消的运行虽然不是失败，却会被当作非成功上报（commit 挂着红叉，公开 badge 显示 cancelled 的那次）。运行 #15 就是这样被 #16 顶掉、badge 一度显示 failing 的；
@@ -670,11 +670,13 @@ serial/               // M5 子包：config.go(类型，无依赖) / serial.go(�
 | **T2b** | **Linux** 上 slave 全关后读 master 返回 `EIO` 还是 EOF？是否被 poller 包装？ | ✅ **已闭合**：CI 运行 #5 的 `ubuntu-latest` 上 `TestReadEndsWithEOF` 通过 —— `EIO` 确实出现，并被归一化为 `io.EOF` | 已完成 |
 | **T5** | Windows ConPTY 序列在本项目代码上是否跑通 | ⚠️ 已由 `go-pty` 与 `hcsshim` **交叉确认**（§3.7），但未在真实 Windows 上验证 | `windows-latest` CI（M3 完成判据） |
 
-### 10.3 Go 版本下限（已定：**`go 1.22`**）
+### 10.3 Go 版本下限（已定：**`go 1.20`**）
 
-T1 表明 poller 行为不构成约束；下限完全由依赖的 `go` 指令决定。实测各版本 `golang.org/x/sys`：
+T1 表明 poller 行为不构成约束；**依赖侧也不再是约束** —— `x/sys v0.30.0` 声明 `go 1.18`，`go.bug.st/serial v1.6.4` 声明 `go 1.17`，两者在 1.20 上都能用。所以下限**完全由我们自己的语法**决定。
 
-| x/sys | `go` 指令 |
+（仍然记录一下依赖侧的可用区间，因为正是它决定了选哪个 `x/sys`：）
+
+| `golang.org/x/sys` | `go` 指令 |
 |---|---|
 | **v0.24.0 – v0.30.0** | **1.18** |
 | v0.31.0 – v0.35.0 | 1.23.0 |
@@ -682,30 +684,47 @@ T1 表明 poller 行为不构成约束；下限完全由依赖的 `go` 指令决
 | v0.42.0 – v0.47.0 | 1.25.0 |
 | v0.48.0 | 1.26.0 |
 
-→ 选 **`x/sys@v0.30.0`**，即 `go 1.18` 分支里最新的一个（v0.31.0 起需要 1.23）。
+→ 选 **`x/sys@v0.30.0`**，即 `go 1.18` 分支里最新的一个。它在 1.20 与 1.22 上都可用，**因此三次调整下限都没有换过依赖版本**。
 
-**为什么能从 1.24 再降到 1.22**：下限的唯一来源是依赖的 `go` 指令，而我们自己没有用任何 1.23+ 的语法 —— 全项目唯一「现代」的用法是 `range` 一个整型常量（1.22 引入，见 `child_unix.go` 的宽限期循环）。`go.bug.st/serial v1.6.4` 声明 `go 1.17`，也不构成限制。
+**成本阶梯。** 因为依赖不设限，代价只取决于我们用了哪些较新的语法，于是形成一张很陡的曲线：
 
-**已验证**（不是推断）：
+| 目标 | 相对上一档还要去掉什么 | 累计处数 |
+|---|---|---|
+| 1.22 | — | 0 |
+| 1.21 | `range` 整型 | 2 |
+| **1.20**（当前） | 再去掉 `slices.*` | **24** |
+| 1.19 | 再去掉 `errors.Join` | 26 |
+| 1.18 | 再展开 `//go:build unix` | 28 **且引入一个静默陷阱** |
 
-1. v0.30.0 具备全部所需符号 —— Windows 侧 ConPTY 的 18 个，Unix 侧两平台共用的 10 个辅助函数，以及 linux/darwin/freebsd/openbsd/netbsd 各自的 ioctl 常量与 syscall 号（含 netbsd 的 `Ptmget` / `IoctlGetPtmget`）。
-2. **Windows ConPTY 的包装在两个版本之间逐字相同**：`CreatePseudoConsole` 与 `ResizePseudoConsole` 完全一致，`ClosePseudoConsole` 只差 `Syscall` 与 `SyscallN`（Go 代码生成差异，语义等价）。降级因此**不改变 Windows 行为**。
-3. 在 **go1.22.0** 下对 16 个目标跑 `build` + `vet` + `test -c`，**全部通过**（含 freebsd / openbsd / netbsd 的 amd64 与 **386**）。
-4. 在 go1.22.0 下**真实运行**全部用例：核心 61 通过 + 1 跳过，`serial` 14 通过；`-race` 亦通过。
+**为什么停在 1.20 而不是继续到 1.18。** Go **1.19** 才引入 `unix` build tag。我们的 `env_unix.go` 是 `//go:build unix`，而 `env_other.go`（js/plan9 的桩）是 `//go:build !unix && !windows`。在 Go 1.18 上 `unix` 为假，于是 `env_unix.go` 被排除、**`env_other.go` 被选中**：包**照样编译通过**，但 `Shell()` 丢掉 passwd 回退，`Environ()` 不再保证 `SHELL` 存在。
+
+这是一处**编译期无法发现的静默错误**，只在旧工具链上发作（现代工具链认得 `unix`，一切正常）。1.20 已经同时拥有 `unix` tag（1.19 起）与 `errors.Join`（1.20 起），停在 1.20 就绕开了它，剩下的 24 处全是测试里的语法替换。
+
+**已验证**（go1.20.14）：
+
+1. v0.30.0 具备全部所需符号 —— Windows 侧 ConPTY 的 18 个，Unix 侧共用的 10 个辅助函数，以及 linux/darwin/freebsd/openbsd/netbsd 各自的 ioctl 常量与 syscall 号（含 netbsd 的 `Ptmget` / `IoctlGetPtmget`）。
+2. **ConPTY 的包装与 v0.41.0 逐字相同**：`CreatePseudoConsole` 与 `ResizePseudoConsole` 完全一致，`ClosePseudoConsole` 只差 `Syscall` 与 `SyscallN`（代码生成差异）。降级**不改变 Windows 行为**。
+3. 16 个目标 `build` + `vet` + `test -c` 全部通过，含 freebsd / openbsd / netbsd 的 amd64 与 **386**。
+4. 全部用例在 go1.20.14 下真实通过：核心 61 通过 + 1 跳过，`serial` 14 通过；`-race` 亦通过。
+
+**为降级所做的 24 处改动**（全部在测试或纯样式层面）：
+
+- 20 × `slices.Equal` + 2 × `slices.Contains` → `helpers_test.go` 中的 `equalStrings` / `containsString`；
+- 2 × `range` 整型 → 经典循环（`child_unix.go` 的宽限期、`pty_unix_test.go` 的 fd 检查）。
 
 最终 `go.mod`：
 
 ```
-go 1.22.0
+go 1.20
 require (
 	go.bug.st/serial v1.6.4   // v1.7.0 起需要 go >= 1.25
 	golang.org/x/sys v0.30.0  // v0.31.0 起需要 go >= 1.23
 )
 ```
 
-> 代价：`x/sys` 比最新版落后约一年。上面第 2 条把它对 Windows 的影响限定为零，Unix 侧则只是 syscall 包装。
+> 代价：`x/sys` 比最新版落后约一年 —— 第 2 条把它对 Windows 的影响限定为零，Unix 侧只是 syscall 包装；`slices` 从测试词汇里消失，换成两个手写 helper。
 >
-> **而 Go 1.22 本身早已超出上游支持窗口。** 因此 CI **同时**测下限与最新（§7.4）—— 只按 `go.mod` 测下限，等于从此再也不测任何一个仍受支持的版本。
+> **而 Go 1.20 同样早已超出上游支持窗口。** 因此 CI 仍**同时**测下限与最新（§7.4）—— 只按 `go.mod` 测下限，等于从此不测任何仍受支持的版本。
 
 ### 10.4 M1 实现期的新发现
 
@@ -891,7 +910,8 @@ Windows 上真正执行到的包括注册表环境合并、`Path` 拼接、`EXPA
 | 34 | 串口的位置 | 独立子包 `serial`，使核心 `pty` 保持「只依赖 x/sys」 | M5 决定（T24） |
 | 35 | 串口的 `Spawn` | 返回 `pty.ErrNoProcess`，**不**复刻上游那个轮询 carrier detect 的假 Child | M5 决定 |
 | 36 | Go 版本下限 | **维持 `go 1.24`**：曾考虑为 netbsd 升到 1.25，实测 `serial` v1.8.0 同样不支持 netbsd，升级换不到任何东西（T20） | M5 实测 |
-| 39 | Go 版本下限（第二次调整） | **降到 `go 1.22`** + `x/sys v0.30.0`：我们自己没用任何 1.23+ 语法，且两个版本的 ConPTY 包装逐字相同（§10.3） | 用户要求实测 |
+| 39 | Go 版本下限（第二、三次调整） | `1.24` → `1.22` → **`1.20`**（`x/sys v0.30.0`）：依赖侧到 1.18 都够用，代价只来自我们自己的语法，且两个版本的 ConPTY 包装逐字相同（§10.3） | 用户要求实测 |
+| 41 | 为什么停在下限 1.20 | 再往前的 1.18 会因缺 `unix` build tag **静默选中 js/plan9 的桩实现**；1.20 已具备 `unix`(1.19) 与 `errors.Join`(1.20) | §10.3 成本阶梯 |
 | 40 | CI 的 Go 版本 | `test` 测**下限 + 最新**两个版本；`cross-compile` 与 `tidy` 只测下限 | §10.3 的必然结果 |
 | 37 | 三个 BSD | **实现**，接受未验证；每处 Godoc 标 `UNVERIFIED`，§7.1 如实标注（用户决定） | 用户决定 |
 | 38 | BSD 的布局与 `_IOC` 算术 | 移出构建约束，使风险最高的部分能在**每个平台**被测试 | §10.8 |

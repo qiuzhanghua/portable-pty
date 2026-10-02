@@ -3,7 +3,6 @@ package pty
 import (
 	"errors"
 	"os"
-	"slices"
 	"testing"
 )
 
@@ -148,7 +147,7 @@ func TestNewConPTYWiresTheConsoleEnds(t *testing.T) {
 	}
 	defer console.close()
 
-	if want := []string{"makePipe", "makePipe", "createPseudoConsole"}; !slices.Equal(host.events, want) {
+	if want := []string{"makePipe", "makePipe", "createPseudoConsole"}; !equalStrings(host.events, want) {
 		t.Errorf("events = %v, want %v", host.events, want)
 	}
 	if host.cols != 120 || host.rows != 40 {
@@ -212,7 +211,7 @@ func TestStartProcessOrdering(t *testing.T) {
 	}
 
 	want := []string{"newAttributeList", "setPseudoConsole", "createProcess", "attrs.delete", "releaseThreadHandle", "newChild"}
-	if !slices.Equal(host.events, want) {
+	if !equalStrings(host.events, want) {
 		t.Errorf("events = %v, want %v", host.events, want)
 	}
 	if host.attachedConsole != console.console {
@@ -256,7 +255,7 @@ func TestStartProcessFreesAttributesWhenAttachFails(t *testing.T) {
 	if !host.attrsDeleted {
 		t.Error("the attribute list leaked when attaching the console failed")
 	}
-	if slices.Contains(host.events, "createProcess") {
+	if containsString(host.events, "createProcess") {
 		t.Error("CreateProcess ran despite the console never being attached")
 	}
 }

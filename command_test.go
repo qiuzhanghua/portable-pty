@@ -1,7 +1,6 @@
 package pty
 
 import (
-	"slices"
 	"testing"
 )
 
@@ -28,14 +27,14 @@ func TestEnvGetEmptyValue(t *testing.T) {
 
 func TestEnvSetReplacesInPlace(t *testing.T) {
 	got := EnvSet([]string{"A=1", "B=2"}, "B", "changed")
-	if want := []string{"A=1", "B=changed"}; !slices.Equal(got, want) {
+	if want := []string{"A=1", "B=changed"}; !equalStrings(got, want) {
 		t.Errorf("EnvSet = %v, want %v", got, want)
 	}
 }
 
 func TestEnvSetAppendsWhenAbsent(t *testing.T) {
 	got := EnvSet([]string{"A=1"}, "B", "2")
-	if want := []string{"A=1", "B=2"}; !slices.Equal(got, want) {
+	if want := []string{"A=1", "B=2"}; !equalStrings(got, want) {
 		t.Errorf("EnvSet = %v, want %v", got, want)
 	}
 }
@@ -44,7 +43,7 @@ func TestEnvSetAppendsWhenAbsent(t *testing.T) {
 // reusing whatever case the existing entry happened to use.
 func TestEnvSetKeepsCallerSpelling(t *testing.T) {
 	got := EnvSet([]string{"Key=old"}, "Key", "new")
-	if want := []string{"Key=new"}; !slices.Equal(got, want) {
+	if want := []string{"Key=new"}; !equalStrings(got, want) {
 		t.Errorf("EnvSet = %v, want %v", got, want)
 	}
 }
@@ -52,14 +51,14 @@ func TestEnvSetKeepsCallerSpelling(t *testing.T) {
 func TestEnvSetDoesNotMutateInput(t *testing.T) {
 	env := []string{"A=1"}
 	_ = EnvSet(env, "B", "2")
-	if want := []string{"A=1"}; !slices.Equal(env, want) {
+	if want := []string{"A=1"}; !equalStrings(env, want) {
 		t.Errorf("EnvSet mutated its input: %v", env)
 	}
 }
 
 func TestEnvUnsetRemovesEveryMatch(t *testing.T) {
 	got := EnvUnset([]string{"A=1", "B=2", "A=3"}, "A")
-	if want := []string{"B=2"}; !slices.Equal(got, want) {
+	if want := []string{"B=2"}; !equalStrings(got, want) {
 		t.Errorf("EnvUnset = %v, want %v", got, want)
 	}
 }

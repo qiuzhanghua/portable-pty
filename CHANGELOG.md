@@ -41,7 +41,7 @@ still change.
 
 ### Verified
 
-CI runs the full suite on Linux, macOS and Windows, against both Go 1.22 (the
+CI runs the full suite on Linux, macOS and Windows, against both Go 1.20 (the
 declared floor) and the current release, and cross-compiles eleven targets
 with the floor. `go test -race` runs where the race detector does.
 

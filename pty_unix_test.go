@@ -332,7 +332,7 @@ func TestChildStdioIsBlocking(t *testing.T) {
 // non-zero, encoding the offending descriptor, if any of fd 0..2 is
 // non-blocking.
 func checkChildStdioFlags() {
-	for fd := range 3 {
+	for fd := 0; fd < 3; fd++ {
 		flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
 		if err != nil {
 			os.Exit(10 + fd)

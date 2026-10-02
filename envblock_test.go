@@ -1,7 +1,6 @@
 package pty
 
 import (
-	"slices"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -30,7 +29,7 @@ func withoutSystemRoot(t *testing.T) {
 func TestEncodeEnvBlockEntriesInOrder(t *testing.T) {
 	withoutSystemRoot(t)
 	got := decodeEnvBlock(encodeEnvBlock([]string{"A=1", "B=2"}))
-	if want := []string{"A=1", "B=2"}; !slices.Equal(got, want) {
+	if want := []string{"A=1", "B=2"}; !equalStrings(got, want) {
 		t.Errorf("encodeEnvBlock = %q, want %q", got, want)
 	}
 }
@@ -59,7 +58,7 @@ func TestEncodeEnvBlockEmpty(t *testing.T) {
 func TestEncodeEnvBlockDedupsCaseInsensitively(t *testing.T) {
 	withoutSystemRoot(t)
 	got := decodeEnvBlock(encodeEnvBlock([]string{"Path=first", "OTHER=x", "PATH=second"}))
-	if want := []string{"PATH=second", "OTHER=x"}; !slices.Equal(got, want) {
+	if want := []string{"PATH=second", "OTHER=x"}; !equalStrings(got, want) {
 		t.Errorf("encodeEnvBlock = %q, want %q", got, want)
 	}
 }
@@ -67,7 +66,7 @@ func TestEncodeEnvBlockDedupsCaseInsensitively(t *testing.T) {
 func TestEncodeEnvBlockDropsEntriesWithoutSeparator(t *testing.T) {
 	withoutSystemRoot(t)
 	got := decodeEnvBlock(encodeEnvBlock([]string{"GOOD=1", "MALFORMED"}))
-	if want := []string{"GOOD=1"}; !slices.Equal(got, want) {
+	if want := []string{"GOOD=1"}; !equalStrings(got, want) {
 		t.Errorf("encodeEnvBlock = %q, want %q", got, want)
 	}
 }
@@ -77,7 +76,7 @@ func TestEncodeEnvBlockAddsSystemRoot(t *testing.T) {
 	t.Setenv("SYSTEMROOT", `C:\Windows`)
 
 	got := decodeEnvBlock(encodeEnvBlock([]string{"A=1"}))
-	if !slices.Contains(got, `SYSTEMROOT=C:\Windows`) {
+	if !containsString(got, `SYSTEMROOT=C:\Windows`) {
 		t.Errorf("encodeEnvBlock = %q, want it to contain SYSTEMROOT", got)
 	}
 }

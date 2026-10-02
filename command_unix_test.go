@@ -5,7 +5,6 @@ package pty
 import (
 	"os"
 	"path"
-	"slices"
 	"testing"
 )
 
@@ -77,7 +76,7 @@ func TestCommandDefaults(t *testing.T) {
 	if cmd.Env == nil {
 		t.Error("Command().Env is nil; want an explicit snapshot")
 	}
-	if want := []string{"/bin/sh"}; !slices.Equal(cmd.Args, want) {
+	if want := []string{"/bin/sh"}; !equalStrings(cmd.Args, want) {
 		t.Errorf("Command().Args = %v, want %v", cmd.Args, want)
 	}
 
@@ -92,7 +91,7 @@ func TestCommandDefaults(t *testing.T) {
 
 func TestCommandPassesArgumentsThrough(t *testing.T) {
 	cmd := Command("/bin/sh", "-c", "true")
-	if want := []string{"/bin/sh", "-c", "true"}; !slices.Equal(cmd.Args, want) {
+	if want := []string{"/bin/sh", "-c", "true"}; !equalStrings(cmd.Args, want) {
 		t.Errorf("Command().Args = %v, want %v", cmd.Args, want)
 	}
 }

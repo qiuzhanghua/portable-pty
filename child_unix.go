@@ -111,7 +111,7 @@ func (c *unixChild) Kill() error {
 
 	// SIGHUP does not guarantee termination, so give the process a grace period
 	// to act on it before resorting to SIGKILL.
-	for attempt := range killGraceAttempts {
+	for attempt := 0; attempt < killGraceAttempts; attempt++ {
 		if attempt > 0 {
 			time.Sleep(killGraceInterval)
 		}

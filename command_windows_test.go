@@ -4,7 +4,6 @@ package pty
 
 import (
 	"os"
-	"slices"
 	"strings"
 	"testing"
 
@@ -31,7 +30,7 @@ func TestEnvCaseInsensitiveOnWindows(t *testing.T) {
 	if v, ok := EnvGet(env, "KEY"); !ok || v != "1" {
 		t.Errorf(`EnvGet(KEY) = %q, %v; want "1", true`, v, ok)
 	}
-	if got := EnvSet(env, "KEY", "2"); !slices.Equal(got, []string{"KEY=2"}) {
+	if got := EnvSet(env, "KEY", "2"); !equalStrings(got, []string{"KEY=2"}) {
 		t.Errorf("EnvSet = %v, want [KEY=2]", got)
 	}
 	if got := EnvUnset(env, "KEY"); len(got) != 0 {
