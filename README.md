@@ -81,9 +81,13 @@ checked on every platform. See DESIGN.md §10.8.
 
 ## Requirements
 
-Go 1.24 or later. Dependencies are pinned to the newest releases that keep that
-floor: `golang.org/x/sys v0.41.0`, and `go.bug.st/serial v1.6.4` for the
-`serial` subpackage (v1.7.0 and later require Go 1.25).
+Go 1.22 or later. Dependencies are pinned to the newest releases that keep that
+floor: `golang.org/x/sys v0.30.0` (v0.31.0 and later require Go 1.23), and
+`go.bug.st/serial v1.6.4` for the `serial` subpackage (v1.7.0 and later require
+Go 1.25).
+
+CI tests both that floor and the current release, since Go 1.22 is itself past
+its upstream support window.
 
 The `serial` subpackage builds only where `go.bug.st/serial` is implemented —
 Linux, macOS, FreeBSD, OpenBSD and Windows. Elsewhere its `Open` returns

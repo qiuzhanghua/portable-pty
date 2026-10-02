@@ -28,23 +28,31 @@ jobs:
   # This is the only job that can validate actual PTY behaviour, including the
   # Linux EIO-on-slave-close semantics that cannot be reproduced on macOS.
   test:
-    name: test (${{ matrix.os }})
+    name: test (${{ matrix.os }}, go ${{ matrix.go }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        # go.mod declares the *floor*, which is the oldest toolchain that must
+        # keep working. Testing only that would mean never running a supported
+        # release, so the newest is tested alongside it. Go 1.22 has been out of
+        # upstream support for a while, which makes this more than a formality.
+        go: ['1.22.x', 'stable']
     steps:
       - uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: ${{ matrix.go }}
           check-latest: false
 
       - name: Verify go.mod / go.sum are tidy
-        if: runner.os == 'Linux'
+        # Tidying is only checked against the floor: that is the version the
+        # committed go.sum was produced with, and a newer toolchain is allowed
+        # to want different things.
+        if: runner.os == 'Linux' && matrix.go == '1.22.x'
         run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
@@ -111,6 +119,10 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # The floor is the toolchain that matters here: a build tag either
+      # compiles or it does not, and that does not change with the Go version,
+      # whereas whether the *oldest* toolchain and the pinned x/sys still cover
+      # every target very much does.
       matrix:
         include:
           # Supported Unix
