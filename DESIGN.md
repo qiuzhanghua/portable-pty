@@ -49,6 +49,7 @@ Go 生态尚无与它**能力对等**的库。本项目的目标是把这份能�
 | 代理 | `GOPROXY=https://goproxy.cn,direct`，网络可用 |
 | 沙箱 | `GOCACHE`（`~/Library/Caches/go-build`）与 `GOMODCACHE`（`/Users/q/cot/repo/go/pkg/mod`）**均不可写**；仅 workspace 与 `/tmp` 可写 |
 | 应对 | 构建/测试时把 `GOCACHE`、`GOMODCACHE` 指向 `/tmp`（已确认决策） |
+| **读取 CI 日志** | Actions 的 job 日志接口**需要鉴权**；未鉴权时只剩一句 `Process completed with exit code 1`，这正是 M3 期间两次靠「猜」定位失败的原因。`GITHUB_TOKEN` 由 `~/.zshrc` 导出，因此只存在于**交互式** shell；非交互 shell 需显式取用。check-run 的 **annotation 无需鉴权**，故 CI 会把失败用例以 `::error::` 重新抛出（见 §7.4） |
 | **设备访问** | workspace-write 沙箱下打开 `/dev/ptmx` 返回 **`EPERM`**。PTY 的实测与测试必须放宽到 `danger-full-access`，或放到外部终端 / CI 运行。这是本项目的硬性开发前提。 |
 | 容器 | 本机**没有** docker / podman / colima / lima / orbstack / qemu，因此 **Linux 行为无法本地验证**（见 §10 T2） |
 | 远端仓库 | `github.com/qiuzhanghua/portable-pty` 尚未创建（404） |
