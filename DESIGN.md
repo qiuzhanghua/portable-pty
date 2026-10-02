@@ -150,14 +150,14 @@ Go 1.27.1 的 `src/syscall/exec_windows.go` 中 `SysProcAttr` 字段为：
 
 4. **`creack/pty` 走的是更差的一条路。** 它用 `syscall.Open` + `os.NewFile` 打开 master（见其 `pty_darwin.go`）：`kindNewFile` 且非阻塞位未置 → `pollable = false`，**阻塞且不在 poller 中**。实测结果是**阻塞中的 `Read` 在 `Close()` 之后 3 秒仍未唤醒，OS 线程被永久钉住**（§10.1 T3）。本项目要做得更好，必须用 `os.OpenFile`。
 
-### 3.6 `EIO` vs `EOF` 的平台差异 ⚠️
+### 3.6 `EIO` vs `EOF` 的平台差异 ✅（两平台均已确认）
 
 slave 全部关闭后：**Linux 读 master 返回 `EIO`**，**darwin 返回 `0`（即 EOF）**。
 
-- **darwin：已实测确认** —— `n=0, err=EOF`（`EIO` 未出现）。详见 §10 T2。
-- **Linux：仍为 `UNVERIFIED`** —— 本机没有容器运行时（§2.1），**无法本地验证**，只能靠 CI。这是 D7 归一化唯一尚未闭合的环节。
+- **darwin**：本地实测，`n=0, err=EOF`（`EIO` 未出现）。
+- **Linux**：由 CI 运行 #5 的 `ubuntu-latest` 实测确认 —— `TestReadEndsWithEOF` 通过，即 `EIO` 确实出现并被归一化为 `io.EOF`（该用例会在收到裸 `EIO` 时失败）。T2b 就此闭合。
 
-→ 结论不变：必须归一化，否则两平台行为不一致；归一化的代码路径在 Linux 上待 CI 验证。
+→ D7 的归一化在两个平台都由真实用例覆盖，不再依赖推断。
 
 ### 3.7 Windows ConPTY 调用序列（已由两个独立实现交叉确认）✅
 
@@ -604,7 +604,7 @@ serial.go             // M5
 | 阶段 | 内容 | 完成判据 |
 |---|---|---|
 | **M0** | 骨架、接口定稿、CI（三平台）、`go.mod` 定 `go 1.24.0` + `x/sys@v0.41.0` | ✅ **已完成**：接口/类型落地，`gofmt`/`build`/`vet`/`test` 在 go1.24.0 下通过，11 平台交叉 `build`+`vet` 通过；三平台 CI 待仓库建立后首跑 |
-| **M1** | Unix：`OpenPty`/`Close`、`Size`/`Resize`、`Spawn`、`ExitStatus`、`Child`/`Killer` | ✅ **darwin 全部通过**（含真实 shell 往返与退出码）；⏳ Linux 由 CI 验证 |
+| **M1** | Unix：`OpenPty`/`Close`、`Size`/`Resize`、`Spawn`、`ExitStatus`、`Child`/`Killer` | ✅ **完成**：13 用例在 darwin（本地）与 linux（CI 运行 #5）全部通过，含真实 shell 往返与退出码；-race 与 11 平台交叉编译亦通过 |
 | **M2** | writer 所有权收尾、`EIO→EOF` 归一化回归、阻塞/唤醒用例 | **Linux CI 上闭合 T2b**；`EIO→EOF` 在 linux/darwin 行为一致；`Fd()` 禁用规则有 lint 兜底 |
 | **M3** | Windows ConPTY：`CreateProcess` + attribute list + 双管道 + `Resize` | `windows-latest` 上能跑通 `cmd.exe`/`powershell` |
 | **M4** | `Command`/`LoginShell`/`Environ`（含注册表环境合并、`PATHEXT`）、`SpawnOption` | 与上游 `CommandBuilder` 行为逐项对照测试 |
@@ -636,7 +636,7 @@ serial.go             // M5
 
 | # | 问题 | 状态 | 计划 |
 |---|---|---|---|
-| **T2b** | **Linux** 上 slave 全关后读 master 返回 `EIO` 还是 EOF？是否被 poller 包装？ | ❌ 本机无容器运行时，**无法验证** | Linux CI 真实用例（M2 完成判据） |
+| **T2b** | **Linux** 上 slave 全关后读 master 返回 `EIO` 还是 EOF？是否被 poller 包装？ | ✅ **已闭合**：CI 运行 #5 的 `ubuntu-latest` 上 `TestReadEndsWithEOF` 通过 —— `EIO` 确实出现，并被归一化为 `io.EOF` | 已完成 |
 | **T5** | Windows ConPTY 序列在本项目代码上是否跑通 | ⚠️ 已由 `go-pty` 与 `hcsshim` **交叉确认**（§3.7），但未在真实 Windows 上验证 | `windows-latest` CI（M3 完成判据） |
 
 ### 10.3 Go 版本下限（已定：**`go 1.24`**）
@@ -675,7 +675,9 @@ require golang.org/x/sys v0.41.0
 | **T8** | `syscall.SysProcAttr` 在 linux 与 darwin 上**都没有** `Umask` 字段；Go 无 `pre_exec` 等价物 | `WithUmask` 从 API 移除，成为对上游的能力缺口（D3、§6） |
 | **T9** | `unix.Syscall` 与 `syscall.Syscall` 在 darwin 上都能完成 PTY 的 ioctl | 一次性误判被实测否证，已回退到 `unix.Syscall`（§3.8 尾注） |
 
-**M1 实测结果（darwin/arm64，go1.24.0）**：13 个用例全部通过，含 `TestInteractiveShell`（真实 `/bin/sh` 往返：写入命令 → 读回 shell 计算出的 `marker-42` → 拿到退出码 3）、`TestKillReportsSignal`（SIGHUP）、`TestCloseWriteStopsWritesButKeepsReads`、`TestTermiosAndPgrp`、`TestChildStdioIsBlocking`。`go test -race` 通过；11 个目标平台 `build` + `vet` + `test -c` 全部通过。
+**M1 实测结果**：13 个用例在 **darwin/arm64（本地，go1.24.0）** 与 **linux/amd64（CI 运行 #5 的 `ubuntu-latest`）** 上全部通过，含 `TestInteractiveShell`（真实 `/bin/sh` 往返：写入命令 → 读回 shell 计算出的 `marker-42` → 拿到退出码 3）、`TestKillReportsSignal`（SIGHUP）、`TestCloseWriteStopsWritesButKeepsReads`、`TestTermiosAndPgrp`、`TestChildStdioIsBlocking`。两平台 `go test -race` 均通过；11 个目标平台 `build` + `vet` + `test -c` 全部通过。
+
+> **M1 因此是第一个在真实 Linux 上验证过的里程碑**，不再是「只在 darwin 上看起来对」。
 
 ---
 
@@ -687,7 +689,7 @@ require golang.org/x/sys v0.41.0
 | **依赖抬高 Go 门槛** | 已缓解：锁定 `x/sys@v0.41.0` 后门限降到 `go 1.24`（vs 若不锁则需 1.25） | 已用 11 平台 `build`+`vet` 验证；日后升级 `x/sys` 必须重新核对 `go` 指令 |
 | **依赖落后于最新 x/sys** | 可能错过上游 bugfix | `x/sys` 相对稳定；升级时重跑 §10.3 的符号与平台核对 |
 | **`EIO`/EOF 平台差异（T2b）** | 跨平台行为不一致，违背 §1.2 | D7 归一化 + Linux CI 用例 |
-| **Linux 路径完全未经本地验证** | 本机无容器运行时 | M1/M2 必须跑 Linux CI，不能只信 darwin |
+| **Linux 路径曾完全无法本地验证** | 本机无容器运行时 | 已缓解：M1 起 Linux 由 CI 真实执行（运行 #5 通过）。后续每个里程碑都必须保持 Linux CI 绿，新增平台相关代码不得只靠交叉编译 |
 | **`Fd()` 陷阱（已实测确认）** | 一次调用即破坏所有 dup 句柄的 poller，并让阻塞的 `Read` 永久卡死 | D6：只暴露 `SyscallConn()`；文档 + lint 双重防护 |
 | **ConPTY 版本门槛（1809）** | 老系统上失败 | 运行时探测 `CreatePseudoConsole` 是否可用，返回清晰错误 |
 | **Windows 管道方向写反** | 表现为无输出或立即 EOF，调试成本高 | T5 |
