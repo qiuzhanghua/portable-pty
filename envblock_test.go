@@ -16,7 +16,19 @@ func decodeEnvBlock(block []uint16) []string {
 	return parts
 }
 
+// withoutSystemRoot clears SYSTEMROOT, so tests that assert an exact block are
+// not perturbed by the injection this package deliberately performs.
+//
+// This is not tidiness: SYSTEMROOT is normally set on Windows and normally
+// absent elsewhere, so without it these assertions pass on Linux and macOS and
+// fail on Windows — which is exactly what happened.
+func withoutSystemRoot(t *testing.T) {
+	t.Helper()
+	t.Setenv("SYSTEMROOT", "")
+}
+
 func TestEncodeEnvBlockEntriesInOrder(t *testing.T) {
+	withoutSystemRoot(t)
 	got := decodeEnvBlock(encodeEnvBlock([]string{"A=1", "B=2"}))
 	if want := []string{"A=1", "B=2"}; !slices.Equal(got, want) {
 		t.Errorf("encodeEnvBlock = %q, want %q", got, want)
@@ -36,9 +48,7 @@ func TestEncodeEnvBlockTerminator(t *testing.T) {
 }
 
 func TestEncodeEnvBlockEmpty(t *testing.T) {
-	// t.Setenv keeps the ambient SYSTEMROOT out of the way, so an empty block
-	// really is just the terminator.
-	t.Setenv("SYSTEMROOT", "")
+	withoutSystemRoot(t)
 	if got := encodeEnvBlock(nil); len(got) != 1 || got[0] != 0 {
 		t.Errorf("encodeEnvBlock(nil) = %v, want a single NUL", got)
 	}
@@ -47,6 +57,7 @@ func TestEncodeEnvBlockEmpty(t *testing.T) {
 // Windows does not distinguish environment names by case, so a repeat must
 // collapse; the first position is kept and the last value wins.
 func TestEncodeEnvBlockDedupsCaseInsensitively(t *testing.T) {
+	withoutSystemRoot(t)
 	got := decodeEnvBlock(encodeEnvBlock([]string{"Path=first", "OTHER=x", "PATH=second"}))
 	if want := []string{"PATH=second", "OTHER=x"}; !slices.Equal(got, want) {
 		t.Errorf("encodeEnvBlock = %q, want %q", got, want)
@@ -54,6 +65,7 @@ func TestEncodeEnvBlockDedupsCaseInsensitively(t *testing.T) {
 }
 
 func TestEncodeEnvBlockDropsEntriesWithoutSeparator(t *testing.T) {
+	withoutSystemRoot(t)
 	got := decodeEnvBlock(encodeEnvBlock([]string{"GOOD=1", "MALFORMED"}))
 	if want := []string{"GOOD=1"}; !slices.Equal(got, want) {
 		t.Errorf("encodeEnvBlock = %q, want %q", got, want)
