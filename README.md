@@ -6,9 +6,10 @@ A cross-platform pseudo-terminal (PTY) library for Go, ported from the Rust
 > **Status: early.** Linux, macOS and Windows are implemented: open/close,
 > window size, spawning with a controlling terminal, exit status, and a child
 > that can be killed independently of `Wait`. The command helpers
-> (`Command`, `LoginShell`, `Environ`) work on every platform. Serial ports are
-> not written yet, and neither are the FreeBSD/OpenBSD/NetBSD paths —
-> `Native()` returns `ErrUnsupported` there. The API may still change.
+> (`Command`, `LoginShell`, `Environ`) work on every platform, and the `serial`
+> subpackage exposes a serial port as a `pty.Master`. The FreeBSD/OpenBSD/NetBSD
+> pseudo-terminal paths are not written yet — `Native()` returns
+> `ErrUnsupported` there. The API may still change.
 > See [DESIGN.md](DESIGN.md) for the plan.
 
 ## Design goals
@@ -36,8 +37,8 @@ report `ErrUnsupported`.
 | Exit status with signal name | ❌ | ❌ | ✅ |
 | Killer decoupled from `Wait` | ❌ | ❌ | ✅ |
 | Child stdio guaranteed blocking | — | — | ✅ asserted by test |
-| Serial ports | ❌ | ❌ | planned |
-| Dependencies | none | `x/sys`, `x/crypto/ssh` | `x/sys` only |
+| Serial ports | ❌ | ❌ | ✅ `serial` subpackage |
+| Dependencies | none | `x/sys`, `x/crypto/ssh` | `x/sys`; `go.bug.st/serial` only in `serial` |
 
 Relative to portable-pty there is one known gap: the Rust crate's
 `CommandBuilder::umask` has no Go equivalent, because `os/exec` offers no
@@ -67,8 +68,15 @@ description, so one call silently degrades all handles of that PTY. Use
 
 ## Requirements
 
-Go 1.24 or later. The dependency is pinned to `golang.org/x/sys v0.41.0`, which
-is the newest release that does not require Go 1.25.
+Go 1.24 or later. Dependencies are pinned to the newest releases that keep that
+floor: `golang.org/x/sys v0.41.0`, and `go.bug.st/serial v1.6.4` for the
+`serial` subpackage (v1.7.0 and later require Go 1.25).
+
+The `serial` subpackage builds only where `go.bug.st/serial` is implemented —
+Linux, macOS, FreeBSD, OpenBSD and Windows. Elsewhere its `Open` returns
+`ErrUnsupported`, so the package still compiles and says so plainly. This
+includes NetBSD: v1.8.0 does not support it either, despite being tagged for it
+upstream.
 
 ## Documentation
 

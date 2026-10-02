@@ -364,7 +364,8 @@ slave 全关后 Linux 返回 `EIO`、darwin 返回 EOF（§3.6）。若不归一
 
 ### D8 —— 依赖与命名
 
-- **依赖只有 `golang.org/x/sys`**（`unix` + `windows`）。**不引** `golang.org/x/crypto/ssh`（`go-pty` 为 `TerminalModes` 引了，我们不提供该能力）。
+- **核心包 `pty` 只依赖 `golang.org/x/sys`**（`unix` + `windows`）。**不引** `golang.org/x/crypto/ssh`（`go-pty` 为 `TerminalModes` 引了，我们不提供该能力）。
+- **串口放在子包 `serial`**，因此它引入的 `go.bug.st/serial` 不会被不使用串口的调用方拖进来（§10.7 T24）。Rust 的 crate 布局做不到这件事；Go 的包布局可以。
 - **包名 `pty`**，避免 `portablepty.PtySize` 这类 stutter。
 - 控制端类型名 **`Master`**（而非 `Pty`），避免 `pty.Pty` 这种重复。
 - 模块路径保留 `github.com/qiuzhanghua/portable-pty`。注意：与 Rust crate 同名，检索时可能混淆，需在 README 首段说明关系与差异。
@@ -507,7 +508,7 @@ type WindowsMaster interface {
 | `ChildKiller::clone_killer` | `Killer.CloneKiller` | ✅ |
 | `ExitStatus` | `ExitStatus` | ✅ |
 | `CommandBuilder` | `Command`/`LoginShell`/`Environ`/`Shell`/`HomeDir` + `Env*` + `SpawnOption` | ⚠️ 除 `umask`（Go 做不到）与 `PATHEXT`（交给 `exec.LookPath`） |
-| `serial` | M5 实现 | ✅ 计划内 |
+| `serial` | 子包 `serial`，返回 `pty.Master` / `pty.System` | ⚠️ 已实现；受 `go.bug.st/serial` 平台限制（无 netbsd/dragonfly/solaris/aix/illumos/plan9），且无流控（§10.7） |
 | `winpty` 回退 | 不做 | ❌ 非目标 |
 | `Downcast` | 不做 | ❌ 非目标 |
 | `serde_support` | 不做 | ❌ 非目标 |
@@ -532,6 +533,8 @@ type WindowsMaster interface {
 
 构建约束相应收紧为 `//go:build linux || darwin`，其余平台一律 `ErrUnsupported`。
 
+子包 `serial` 另有约束：`go.bug.st/serial` **只实现 linux/darwin/freebsd/openbsd/windows**（js 可编译）。在其余平台（含 **netbsd**）该子包由 `unsupported.go` 接管，`Open` 返回 `ErrUnsupported` —— 包始终存在且始终可编译，不会让调用方撞上「build constraints exclude all Go files」。见 §10.7 T19–T21。
+
 ### 7.2 为什么不做 Solaris/illumos
 
 它们走 STREAMS（`grantpt`/`unlockpt`/`ptsname` 语义与 `TIOCPTMGET` 均不同，`creack/pty` 为此有独立文件）。首版用 `ErrUnsupported` 明确拒绝，好过静默出错。
@@ -554,7 +557,7 @@ spawn_unix.go         // os/exec 路径 + Setsid/Setctty + 把 slave 交给子�
 spawn_windows.go      // CreateProcess + StartupInfoEx + env block + ComposeCommandLine
 child_unix.go         // Child/Killer（SIGHUP→宽限→强杀）
 child_windows.go      // Child/Killer（TerminateProcess / 句柄）
-serial.go             // M5
+serial/               // M5 子包：config.go(类型，无依赖) / serial.go(实现) / unsupported.go(其余平台)
 ```
 
 ### 7.4 CI（已建立：`.github/workflows/ci.yml`）
@@ -615,7 +618,7 @@ serial.go             // M5
 | **M2** | writer 所有权收尾、`EIO→EOF` 归一化回归、阻塞/唤醒用例 | **Linux CI 上闭合 T2b**；`EIO→EOF` 在 linux/darwin 行为一致；`Fd()` 禁用规则有 lint 兜底 |
 | **M3** | Windows ConPTY：`CreateProcess` + attribute list + 双管道 + `Resize` | ✅ **完成**：CI 运行 #14 的 `windows-latest` 上全部通过 —— 真实 `cmd.exe` 输出、退出码 7、`Kill`、`CloseWrite`、`Resize`。时序与句柄所有权由平台中立的假 host 在 linux/darwin 上另外覆盖 |
 | **M4** | `Command`/`LoginShell`/`Environ`/`Shell`/`HomeDir`/`Env*`、Windows 注册表环境合并、`SpawnOption` | ✅ **完成**：29 个用例在 darwin（本地）、linux 与 windows（CI 运行 #9）全部通过。`PATHEXT` 未自行实现：`exec.LookPath` 在 Windows 上已经处理扩展名（见 §10.5）。`umask` 见 D3，属客观缺口 |
-| **M5** | `serial`（串口），与 `System`/`Master` 抽象合流 | 能用 `System` 抽象打开串口 |
+| **M5** | `serial`（串口），与 `System`/`Master` 抽象合流 | ✅ **完成**：CI 全绿。用 pty slave 模拟串口设备，在 linux/darwin 上验证双向收发、CloseWrite、读阻塞行为；其余平台见 §10.7 |
 | **M6** | 文档、README（含与 Rust crate / go-pty 的关系说明）、API 对照表 | 可发布 |
 
 ---
@@ -735,6 +738,34 @@ Windows 上真正执行到的包括注册表环境合并、`Path` 拼接、`EXPA
 
 ---
 
+### 10.7 M5 实测结果与实现期的新发现
+
+**用例数（按平台如实统计；共声明 84 个 = 核心 70 + serial 14）**
+
+| 平台 | 核心 | serial | 合计 |
+|---|---|---|---|
+| darwin/arm64（本地） | 57 运行（56 通过 + 1 跳过） | 14 通过 | 70 通过 / 1 跳过 |
+| linux/amd64（CI） | 57 通过 | 14 通过 | 71 通过 |
+| windows/amd64（CI） | 50 通过 | 7 通过 | 57 通过 |
+
+串口在 linux/darwin 上用 **pty slave 冒充串口设备**验证（`go.bug.st/serial` 能打开 pty slave），因此双向收发、`CloseWrite`、读阻塞都不需要真实硬件；Windows 上没有 pty，只跑不依赖设备的用例。
+
+| # | 发现 | 影响 |
+|---|---|---|
+| **T19** | `go.bug.st/serial` 只实现 **linux / darwin / freebsd / openbsd / windows**（js 可编译） | 其余平台走 `unsupported.go` |
+| **T20** | **v1.8.0 仍然不支持 netbsd**，失败信息与 v1.6.4 一模一样（`undefined: unixPort`）；上游 `master` 的 `serial_unix.go` 依旧只写了 `linux \|\| darwin \|\| freebsd \|\| openbsd` | **把 Go 升到 1.25 换不到 netbsd 支持**，因此**没有升级**：下限更低意味着更多用户能用，无收益就不动 |
+| **T21** | 上游 `serial_bsd.go` 的 tag **包含** netbsd/dragonfly，但定义 `unixPort` 的 `serial_unix.go` **不包含** —— 看起来是一行疏忽 | 上游 PR 可能很小；但**即便修了也无法验证**（GitHub 没有 netbsd runner），与本项目暂缓 BSD PTY 是同一个理由 |
+| **T22** | 库把读超时报告为 **`(0, nil)`** | 直接透传会被 `io.ReadAll`/`io.Copy` 当成 EOF 而**截断流**（上游 `Reader` 也在绕这个坑）。我们的 `Read` 改为等到有数据、或等 `Close` 让它失败 |
+| **T23** | 库**没有流控设置，也没有写超时** | 上游的 XON/XOFF 默认值与写超时无法复刻；已写进 Godoc，且不提供「静默无效」的字段 |
+| **T24** | 串口放进**子包**而非根包 | 核心 `pty` 保持「只依赖 x/sys」，README 的承诺继续成立。Rust 的 crate 布局做不到，Go 的包布局可以 |
+
+**两处刻意的偏离：**
+
+1. **`Spawn` 返回 `pty.ErrNoProcess`**，而不是上游那个 `SerialChild`（`wait()` 每 5 秒轮询 carrier detect，出错就当作进程退出）。那是**穿着进程外衣的存活检查**；调用方直接 `Read` 就能拿到同样信号（适配器被拔掉会让 Read 失败），而且假 Child 会把错误推得离原因很远。
+2. **子包位置**（T24）。
+
+---
+
 ## 11. 风险
 
 | 风险 | 影响 | 缓解 |
@@ -803,6 +834,9 @@ Windows 上真正执行到的包括注册表环境合并、`Path` 拼接、`EXPA
 | 31 | Windows 上的 `CloseWrite` | 关闭控制台输入管道我方这端，向子进程送**真实 EOF**（Unix 上只能是逻辑半关） | M3 发现（T16） |
 | 32 | Windows 上「读到底」 | 控制台在 pseudoconsole 关闭前一直持有输出管道，因此 **`Wait` 才是会话结束的信号**，不是 EOF | M3 发现（T16） |
 | 33 | `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` | 属性值是 HPCON **本身**（不是指向它的指针）；用辅助函数转换以避开 `go vet` 的 unsafeptr 检查 | M3 实现 |
+| 34 | 串口的位置 | 独立子包 `serial`，使核心 `pty` 保持「只依赖 x/sys」 | M5 决定（T24） |
+| 35 | 串口的 `Spawn` | 返回 `pty.ErrNoProcess`，**不**复刻上游那个轮询 carrier detect 的假 Child | M5 决定 |
+| 36 | Go 版本下限 | **维持 `go 1.24`**：曾考虑为 netbsd 升到 1.25，实测 `serial` v1.8.0 同样不支持 netbsd，升级换不到任何东西（T20） | M5 实测 |
 
 ---
 
