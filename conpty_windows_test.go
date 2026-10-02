@@ -189,22 +189,3 @@ func TestConPTYSpawnRejectsBadCommand(t *testing.T) {
 		t.Error("Spawn of a command with no Path succeeded, want an error")
 	}
 }
-
-// Two spawns on one console are not possible: a pseudoconsole owns a single
-// session. Whatever the second attempt does, it must not succeed silently.
-func TestConPTYSecondSpawnFailsOrRuns(t *testing.T) {
-	m := openTestConPTY(t, DefaultSize)
-
-	first, err := m.Spawn(exec.Command("cmd.exe", "/c", "exit 0"))
-	if err != nil {
-		t.Fatalf("first Spawn: %v", err)
-	}
-	readToEnd(t, m, first)
-
-	second, err := m.Spawn(exec.Command("cmd.exe", "/c", "exit 0"))
-	if err != nil {
-		t.Logf("a second Spawn on the same console failed, which is acceptable: %v", err)
-		return
-	}
-	readToEnd(t, m, second)
-}

@@ -62,7 +62,30 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test ./...
+        shell: bash
+        run: |
+          set +e
+          go test ./... >"$RUNNER_TEMP/test.log" 2>&1
+          status=$?
+          cat "$RUNNER_TEMP/test.log"
+
+          # A failing job's log cannot be read through the API without a token,
+          # and then a failure reports nothing but "Process completed with exit
+          # code 1". Annotations, unlike logs, are readable anonymously, so
+          # repeat the useful part as ::error:: lines.
+          #
+          # This exists because diagnosing two windows-latest failures had to be
+          # done by re-reading the code, and guessing is not a debugging method.
+          if [ "$status" -ne 0 ]; then
+            detail=$(grep -E -- '--- FAIL|_test\.go:[0-9]+:|^panic:|FAIL[[:space:]]' "$RUNNER_TEMP/test.log" | head -12)
+            if [ -z "$detail" ]; then
+              detail=$(tail -20 "$RUNNER_TEMP/test.log")
+            fi
+            printf '%s\n' "$detail" | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+          fi
+          exit "$status"
 
       - name: Test (race)
         if: runner.os != 'Windows'
