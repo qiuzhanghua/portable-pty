@@ -1,25 +1,4 @@
-# Normalise line endings in the repository and in the working tree.
-#
-# This is not cosmetic. Git's core.autocrlf defaults to true on the GitHub
-# Windows runners, so without this file a Windows checkout converts every LF to
-# CRLF — and gofmt then reports every .go file as unformatted. That is exactly
-# how CI failed on its first run: gofmt passed on Linux and macOS, failed on
-# Windows, and skipped Build/Vet/Test behind it.
-
+# Keep LF in the working tree. Windows checkouts (core.autocrlf defaults to true
+# on the GitHub runners) would otherwise turn every .go file into CRLF, and
+# gofmt then flags all of them — which is how CI failed on its first run.
 * text=auto eol=lf
-
-# Windows shell scripts want CRLF.
-*.bat text eol=crlf
-*.cmd text eol=crlf
-*.ps1 text eol=crlf
-
-# Binary assets: never rewrite.
-*.png   binary
-*.jpg   binary
-*.jpeg  binary
-*.gif   binary
-*.ico   binary
-*.exe   binary
-*.dll   binary
-*.so    binary
-*.dylib binary
