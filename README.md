@@ -94,7 +94,8 @@ The `serial` subpackage builds only where `go.bug.st/serial` is implemented —
 Linux, macOS, FreeBSD, OpenBSD and Windows. Elsewhere its `Open` returns
 `ErrUnsupported`, so the package still compiles and says so plainly. This
 includes NetBSD: v1.8.0 does not support it either, despite being tagged for it
-upstream.
+upstream. DESIGN.md §10.9 has the evidence, a ready-to-file upstream report, and
+the checklist for re-enabling it.
 
 ## Documentation
 

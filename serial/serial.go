@@ -20,7 +20,9 @@ import (
 // dragonfly, solaris, aix, illumos and plan9 are not implemented by that
 // library; unsupported.go covers those, so that this package always exists and
 // reports pty.ErrUnsupported rather than vanishing and leaving an importer with
-// "build constraints exclude all Go files".
+// "build constraints exclude all Go files". When upstream's tag is corrected,
+// this constraint and that file's complement have to move together: DESIGN.md
+// §10.9 has the evidence and the checklist.
 
 // serialReadTimeout mirrors portable-pty. It has to be short: on Windows a long
 // read timeout blocks a concurrent write from making progress, which matters

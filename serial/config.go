@@ -9,7 +9,8 @@
 // A serial line has no process behind it, so Master.Spawn reports
 // pty.ErrNoProcess rather than inventing one. go.bug.st/serial implements
 // linux, darwin, freebsd, openbsd and windows; on any other platform Open
-// reports pty.ErrUnsupported. See DESIGN.md §10.7 for the rest.
+// reports pty.ErrUnsupported. See DESIGN.md §10.7 for the rest, and §10.9 for
+// the upstream gap that keeps netbsd in that group.
 package serial
 
 // Parity is a serial port's parity-checking mode.

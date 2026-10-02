@@ -804,7 +804,7 @@ Windows 上真正执行到的包括注册表环境合并、`Path` 拼接、`EXPA
 |---|---|---|
 | **T19** | `go.bug.st/serial` 只实现 **linux / darwin / freebsd / openbsd / windows**（js 可编译） | 其余平台走 `unsupported.go` |
 | **T20** | **v1.8.0 仍然不支持 netbsd**，失败信息与 v1.6.4 一模一样（`undefined: unixPort`）；上游 `master` 的 `serial_unix.go` 依旧只写了 `linux \|\| darwin \|\| freebsd \|\| openbsd` | **把 Go 升到 1.25 换不到 netbsd 支持**，因此**没有升级**：下限更低意味着更多用户能用，无收益就不动 |
-| **T21** | 上游 `serial_bsd.go` 的 tag **包含** netbsd/dragonfly，但定义 `unixPort` 的 `serial_unix.go` **不包含** —— 看起来是一行疏忽 | 上游 PR 可能很小；但**即便修了也无法验证**（GitHub 没有 netbsd runner），与本项目暂缓 BSD PTY 是同一个理由 |
+| **T21** | 上游 `serial_bsd.go` 的 tag **包含** netbsd/dragonfly，但定义 `unixPort` 的 `serial_unix.go` **不包含** —— 看起来是一行疏忽 | 上游 PR 可能很小；但**即便修了也无法验证**（GitHub 没有 netbsd runner），与暂缓 BSD PTY 是同一个理由。**可提交的报告与修好后的收尾清单见 §10.9** |
 | **T22** | 库把读超时报告为 **`(0, nil)`** | 直接透传会被 `io.ReadAll`/`io.Copy` 当成 EOF 而**截断流**（上游 `Reader` 也在绕这个坑）。我们的 `Read` 改为等到有数据、或等 `Close` 让它失败 |
 | **T23** | 库**没有流控设置，也没有写超时** | 上游的 XON/XOFF 默认值与写超时无法复刻；已写进 Godoc，且不提供「静默无效」的字段 |
 | **T24** | 串口放进**子包**而非根包 | 核心 `pty` 保持「只依赖 x/sys」，README 的承诺继续成立。Rust 的 crate 布局做不到，Go 的包布局可以 |
@@ -836,6 +836,88 @@ Windows 上真正执行到的包括注册表环境合并、`Path` 拼接、`EXPA
 
 1. **`_IOC` 请求号是算出来的，不是抄来的。** 它编码了参数结构体的大小，32/64 位不同。把布局与算术移出构建约束后，测试能在 darwin 上确认算出来的数**等于**参考实现硬编码的值，这就把「抄错一位十六进制」这类错误挡在了外面。
 2. **`SPECNAMELEN` 的架构差异被规避了。** freebsd 的 `FIODGNAME` 需要一个名字缓冲区，而 `SPECNAMELEN` 在多数架构是 `0x3f`、arm64 是 `0xff`。实现里用一个足够大的固定缓冲区，不去关心它 —— 内核只写名字实际需要的字节数。
+
+---
+
+### 10.9 上游 netbsd 缺口：证据、可提交的报告、修好之后要做什么
+
+`serial` 子包在 **netbsd**（以及 **dragonfly**）上不可用的原因**不在我们这边**，而在 `go.bug.st/serial` 自身的构建约束互相矛盾。这一节把证据、可以直接提交给上游的报告，以及上游修好之后我们该动哪里一并记下来 —— 这份草稿原先只存在于讨论里，落到文档是为了让下一个人能直接接手，而不是重新查一遍。
+
+**现状（2026-10-02 核实）**，`go1.25.0` 下对最新发布版 v1.8.0：
+
+```
+# go.bug.st/serial
+serial_bsd.go:13:13: undefined: unixPort
+serial.go:83:15:     undefined: nativeOpen
+serial.go:94:9:      undefined: nativeGetPortsList
+```
+
+根因是两个文件的构建约束不一致：
+
+| 文件 | `//go:build` |
+|---|---|
+| `serial_bsd.go`（含 netbsd / dragonfly 的辅助代码） | `darwin \|\| dragonfly \|\| freebsd \|\| netbsd \|\| openbsd` |
+| `serial_unix.go`（**定义 `unixPort`** 的那个） | `linux \|\| darwin \|\| freebsd \|\| openbsd` |
+
+于是 netbsd / dragonfly 拿到了 `serial_bsd.go` 的辅助函数，却拿不到端口类型。看起来只是 `serial_unix.go` 的 tag 漏写了两个平台。
+
+**已核实的版本范围**：`v1.6.4`、`v1.8.0`（当前最新，2026-07-15 发布）与上游 `master` **三者全都是这个 tag**。也就是说每个已发布版本都受影响，不是「新版本还没轮到」。
+
+**不要为此提高 Go 下限。** 曾经考虑为它把 `go` 升到 1.25，但实测 v1.8.0 同样不支持 netbsd，升级换不到任何东西（§10.7 T20）。下限维持在 1.20。
+
+#### 可提交给上游的报告
+
+以下内容可直接作为 issue 提交到 <https://github.com/bugst/go-serial/issues>：
+
+````markdown
+**Title:** netbsd and dragonfly do not build: `undefined: unixPort`
+
+On NetBSD and DragonFly the package does not compile. With `v1.8.0`:
+
+```
+# go.bug.st/serial
+serial_bsd.go:13:13: undefined: unixPort
+serial.go:83:15:     undefined: nativeOpen
+serial.go:94:9:      undefined: nativeGetPortsList
+```
+
+**Cause.** `serial_bsd.go` is tagged for NetBSD and DragonFly —
+`//go:build darwin || dragonfly || freebsd || netbsd || openbsd` — but the file
+that actually defines the port type is not: `serial_unix.go` is
+`//go:build linux || darwin || freebsd || openbsd`. So on those two platforms the
+helpers compile while `unixPort` and the generated syscall wrappers do not,
+leaving `Open` and `GetPortsList` with nothing to call.
+
+**Suggested fix.** Add the two platforms to that tag:
+
+```
+//go:build linux || darwin || dragonfly || freebsd || netbsd || openbsd
+```
+
+NetBSD's and DragonFly's termios and the ioctls used there (`TIOCGETA`,
+`TIOCSETA`, `TIOCFLUSH` / `TCFLSH`) match FreeBSD's, so nothing else looks
+necessary. `serial_resetbuf_linux_bsd.go` is tagged `linux || freebsd ||
+openbsd` and may want the same treatment.
+
+**Caveat.** I have not tested this, which is why this is an issue rather than a
+pull request: I have no NetBSD or DragonFly machine, and GitHub's hosted runners
+include neither. `GOOS=netbsd go build ./...` currently fails; `go test ./...`
+on real hardware would confirm the fix.
+
+**Versions checked.** `v1.6.4`, `v1.8.0`, and current `master` all carry the same
+tag, so every released version is affected.
+````
+
+#### 上游修好之后要改什么
+
+目前 `serial` 子包在 netbsd / dragonfly 上由 `unsupported.go` 接管，`Open` 返回 `ErrUnsupported`，包始终存在且始终可编译。上游一旦修好：
+
+1. 把 `serial/serial.go` 与 `serial/serial_test.go` 的构建约束扩到含 `netbsd || dragonfly`，**并同步反向修改 `serial/unsupported.go` 的补集**。这两处必须一起动：只改一边会让旧平台重新落入「编译通过但选错了实现」的静默错误，也就是 §10.3 那个陷阱的同一种形态。
+2. `serial/serial_unix_test.go` 的构建约束加上 `netbsd || dragonfly`。
+3. cross-compile 矩阵里已经有 `netbsd/amd64`，可再考虑加 `dragonfly/amd64`。但**在有真实机器跑过 `go test ./...` 之前，netbsd 串口仍是「能编译、未验证」**，与三个 BSD 的 PTY 同等对待（§10.8）。
+4. 回来更新 §10.7 的 T19–T21、§7.1 的平台表，以及这一节。
+
+**在完成第 3 步之前，不要对外宣称 netbsd 串口可用。**
 
 ---
 
@@ -911,6 +993,7 @@ Windows 上真正执行到的包括注册表环境合并、`Path` 拼接、`EXPA
 | 35 | 串口的 `Spawn` | 返回 `pty.ErrNoProcess`，**不**复刻上游那个轮询 carrier detect 的假 Child | M5 决定 |
 | 36 | Go 版本下限 | **维持 `go 1.24`**：曾考虑为 netbsd 升到 1.25，实测 `serial` v1.8.0 同样不支持 netbsd，升级换不到任何东西（T20） | M5 实测 |
 | 39 | Go 版本下限（第二、三次调整） | `1.24` → `1.22` → **`1.20`**（`x/sys v0.30.0`）：依赖侧到 1.18 都够用，代价只来自我们自己的语法，且两个版本的 ConPTY 包装逐字相同（§10.3） | 用户要求实测 |
+| 42 | netbsd 串口缺口 | 不提高 Go 下限去等上游（升级无效）；把证据、可直接提交的报告、修好后的收尾清单写入 §10.9 | 用户决定 |
 | 41 | 为什么停在下限 1.20 | 再往前的 1.18 会因缺 `unix` build tag **静默选中 js/plan9 的桩实现**；1.20 已具备 `unix`(1.19) 与 `errors.Join`(1.20) | §10.3 成本阶梯 |
 | 40 | CI 的 Go 版本 | `test` 测**下限 + 最新**两个版本；`cross-compile` 与 `tidy` 只测下限 | §10.3 的必然结果 |
 | 37 | 三个 BSD | **实现**，接受未验证；每处 Godoc 标 `UNVERIFIED`，§7.1 如实标注（用户决定） | 用户决定 |
