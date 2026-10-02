@@ -254,6 +254,49 @@ func TestTermiosAndPgrp(t *testing.T) {
 	}, "foreground process group to become the child")
 }
 
+// Command is the CommandBuilder::new equivalent; what it builds has to spawn
+// and report a status, not just look right.
+func TestCommandThroughPty(t *testing.T) {
+	m := openTestPty(t, DefaultSize)
+
+	child, err := m.Spawn(Command("/bin/sh", "-c", "exit 9"))
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	io.Copy(io.Discard, m)
+
+	status, err := child.Wait()
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if status.Code != 9 {
+		t.Errorf("exit code = %d, want 9", status.Code)
+	}
+}
+
+// LoginShell is the new_default_prog equivalent. A real login shell must run,
+// which means the "-" argv[0] trick has to survive contact with the kernel.
+func TestLoginShellThroughPty(t *testing.T) {
+	m := openTestPty(t, DefaultSize)
+
+	cmd := LoginShell()
+	cmd.Args = append(cmd.Args, "-c", "exit 4")
+
+	child, err := m.Spawn(cmd)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	io.Copy(io.Discard, m)
+
+	status, err := child.Wait()
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if status.Code != 4 {
+		t.Errorf("exit code = %d, want 4 (shell %q)", status.Code, cmd.Path)
+	}
+}
+
 // TestChildStdioIsBlocking guards the invariant that the child's standard
 // descriptors are blocking. It holds only because os/exec calls (*os.File).Fd()
 // on them, which clears the O_NONBLOCK that os.OpenFile set when we opened the
