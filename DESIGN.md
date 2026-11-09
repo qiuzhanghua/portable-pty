@@ -921,7 +921,7 @@ tag, so every released version is affected.
 
 ---
 
-### 10.10 M6：`Shell()` 的探测顺序改写（对齐 qcode）
+### 10.10 后续修正：`Shell()` 的探测顺序（对齐 qcode）
 
 上游（以及改造前的本包）是 `$SHELL → passwd → /bin/sh`。这条阶梯在两个地方给出错误答案：
 
@@ -999,7 +999,7 @@ tag, so every released version is affected.
 | 23 | 信号名格式 | 用 `unix.SignalName`（`SIGHUP`），**刻意偏离**上游的 `strsignal`（受 locale 影响） | M1 实现 |
 | 24 | `Command`/`LoginShell` 的 `Dir` | 默认 home（忠实上游）；但**不**复刻上游「cwd 不存在就静默改用 home」 | M4 实现 |
 | 25 | `PATHEXT` | 交给 `exec.LookPath`，不自行实现；注意它读进程 `PATH` 而非 `cmd.Env` | M4 发现（T12） |
-| 26 | `passwdShell` | 自行解析 `/etc/passwd`（`os/user` 不暴露 `pw_shell`）；macOS 上查不到，由 `dscl` 那一层补上（§10.10） | M4 实现，M6 补正 |
+| 26 | `passwdShell` | 自行解析 `/etc/passwd`（`os/user` 不暴露 `pw_shell`）；macOS 上查不到，由 `dscl` 那一层补上（§10.10） | M4 实现，后续补正 |
 | 27 | `isExecutable` | 用 mode 位而非 `access(2)`，以免 `//go:build unix` 引入平台相关 syscall | M4 实现 |
 | 28 | 合并策略的位置 | 抽到平台中立的 `envmerge.go`，让 Windows 逻辑也能在 linux/darwin CI 上被测 | M4 发现（T10） |
 | 29 | ConPTY 时序的位置 | 抽到平台中立的 `conpty.go`（`conptyHost` 接口），只有 kernel32 翻译留在 Windows 文件 | M3 方案（用户批准） |
