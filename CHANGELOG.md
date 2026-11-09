@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **`Shell()` now looks for the shell the user is actually typing in, not the
+  one they were given at login.** The ladder is: the enclosing interactive
+  shell found by walking the parent chain, the login shell from the user
+  database (`dscl` on macOS, `/etc/passwd` elsewhere), `$SHELL`, then `/bin/sh`.
+  The old `$SHELL → passwd → /bin/sh` order returned `/bin/bash` or `/bin/sh`
+  for GUI processes on macOS, where `$SHELL` is inherited from launchd and the
+  account is not in `/etc/passwd`. `sh`/`dash` are deliberately not treated as
+  interactive shells, so a program started from a script does not resolve to
+  the shell running that script. Same order as qcode's `shell.rs`; see
+  DESIGN.md §10.10.
+- `Environ()` fills a missing `SHELL` with `Shell()` rather than the passwd
+  entry alone, so the child's `SHELL` matches the shell it will run.
+
 ## v0.2.1
 
 Documentation only. No API changes and no behaviour changes: the only new Go

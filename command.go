@@ -13,7 +13,8 @@ import (
 // CommandBuilder adds:
 //
 //   - Unix: SHELL is guaranteed to be present. When the variable is unset it is
-//     filled in from the passwd database, falling back to /bin/sh.
+//     filled in from Shell(), which looks at the parent process chain and the
+//     login shell before falling back to /bin/sh.
 //   - Windows: the machine and user environments are merged in from the
 //     registry, REG_EXPAND_SZ values are expanded, and the user Path is
 //     appended to the machine Path.

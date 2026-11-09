@@ -563,7 +563,7 @@ type WindowsMaster interface {
 ```
 pty.go                // Size / ExitStatus / System / Master / Child / Killer / Native
 command.go            // Command / LoginShell / Environ / HomeDir / Env*
-env_unix.go           // //go:build unix —— Shell / baseEnviron / passwdShell
+env_unix.go           // //go:build unix —— Shell（父进程链 / login shell / $SHELL）/ baseEnviron / passwdShell
 env_windows.go        // //go:build windows —— ComSpec + 注册表环境合并
 env_other.go          // //go:build !unix && !windows —— 让 js/wasm、plan9 也能编译
 envmerge.go           // 合并策略（平台中立，便于在任意平台测试）
@@ -782,7 +782,7 @@ Windows 上真正执行到了 ConPTY 全链路：`OpenPty`、真实 `cmd.exe` �
 | linux/amd64（CI #9） | 39 | 39 | 0 |
 | windows/amd64（CI #9） | 25 | 25 | 0 |
 
-Windows 上真正执行到的包括注册表环境合并、`Path` 拼接、`EXPAND_SZ` 展开、`USERNAME` 保留与大小写不敏感键匹配。darwin 上那个跳过恰好**印证**了 §10.5 记录的 `passwdShell` 局限：本机账号确实不在 `/etc/passwd` 里。
+Windows 上真正执行到的包括注册表环境合并、`Path` 拼接、`EXPAND_SZ` 展开、`USERNAME` 保留与大小写不敏感键匹配。darwin 上那个跳过恰好**印证**了 `passwdShell` 的局限：本机账号确实不在 `/etc/passwd` 里。`loginShell()` 现在在 darwin 上先用 `dscl` 取 `UserShell`，所以这一层不会再把 macOS 用户丢给 `/bin/sh`（见 §10.10）。
 
 **一处刻意的语义偏离（`Dir` 默认值）**：`Command()` / `LoginShell()` 把 `Dir` 默认设为 home，与上游一致；但上游在配置的 cwd **不存在**时会**静默改用 home**，本包不做这件事 —— 隐藏一个坏路径只是把失败推后。非法的 `cmd.Dir` 会让 `Spawn` 直接返回 chdir 错误。
 
@@ -921,6 +921,24 @@ tag, so every released version is affected.
 
 ---
 
+### 10.10 M6：`Shell()` 的探测顺序改写（对齐 qcode）
+
+上游（以及改造前的本包）是 `$SHELL → passwd → /bin/sh`。这条阶梯在两个地方给出错误答案：
+
+- **`$SHELL` 是登录时“发给”用户的 shell，不是用户此刻正在用的 shell。** GUI 进程从 launchd 或服务管理器继承它，macOS 上常常还是 `/bin/bash`。
+- **macOS 账号不在 `/etc/passwd` 里**，passwd 层查不到，于是回退到 `/bin/sh`（§10.6 里那个跳过就是证据）。
+
+现在的顺序与 qcode 的 `crates/qcode-terminal/src/shell.rs` 一致：
+
+1. **父进程链**：从本进程逐层向上（最多 12 层，`seen` 防环），取最近的、可执行的交互式 shell。只认 bash/zsh/fish/nu/elvish/xonsh/tcsh/csh/ksh/mksh/oksh/yash/pwsh —— 不含 sh/dash，否则从脚本里启动的程序会全部解析成 dash。Linux 的 `comm` 是裸名，经 `PATH` 解析；macOS 的 `comm` 通常是完整路径。
+2. **login shell**：darwin 走 `/usr/bin/dscl . -read /Users/<user> UserShell`（进程内 `sync.Once` 缓存），其余 Unix 解析 `/etc/passwd`。
+3. **`$SHELL`**。
+4. `/bin/sh`。
+
+`Environ()` 在 `SHELL` 缺失时用 `Shell()` 补，子进程看到的 `SHELL` 因此是它实际要运行的 shell，而不是一个继承来的旧值。任何一层读不到（`ps` 不可用、路径不可执行、pid 环）都只是静默跳过。
+
+**实测**（darwin/arm64，`$SHELL=/bin/zsh`）：直接从 zsh 启动得到 `/bin/zsh`；在 `/bin/bash -c './probe; :'` 里得到 `/bin/bash` —— 父进程链优先于 `$SHELL`。`go test ./...` 两个包全部通过。
+
 ## 11. 风险
 
 | 风险 | 影响 | 缓解 |
@@ -981,7 +999,7 @@ tag, so every released version is affected.
 | 23 | 信号名格式 | 用 `unix.SignalName`（`SIGHUP`），**刻意偏离**上游的 `strsignal`（受 locale 影响） | M1 实现 |
 | 24 | `Command`/`LoginShell` 的 `Dir` | 默认 home（忠实上游）；但**不**复刻上游「cwd 不存在就静默改用 home」 | M4 实现 |
 | 25 | `PATHEXT` | 交给 `exec.LookPath`，不自行实现；注意它读进程 `PATH` 而非 `cmd.Env` | M4 发现（T12） |
-| 26 | `passwdShell` | 自行解析 `/etc/passwd`（`os/user` 不暴露 `pw_shell`）；macOS 上通常查不到而回退 `/bin/sh` | M4 实现 |
+| 26 | `passwdShell` | 自行解析 `/etc/passwd`（`os/user` 不暴露 `pw_shell`）；macOS 上查不到，由 `dscl` 那一层补上（§10.10） | M4 实现，M6 补正 |
 | 27 | `isExecutable` | 用 mode 位而非 `access(2)`，以免 `//go:build unix` 引入平台相关 syscall | M4 实现 |
 | 28 | 合并策略的位置 | 抽到平台中立的 `envmerge.go`，让 Windows 逻辑也能在 linux/darwin CI 上被测 | M4 发现（T10） |
 | 29 | ConPTY 时序的位置 | 抽到平台中立的 `conpty.go`（`conptyHost` 接口），只有 kernel32 翻译留在 Windows 文件 | M3 方案（用户批准） |
@@ -998,6 +1016,7 @@ tag, so every released version is affected.
 | 40 | CI 的 Go 版本 | `test` 测**下限 + 最新**两个版本；`cross-compile` 与 `tidy` 只测下限 | §10.3 的必然结果 |
 | 37 | 三个 BSD | **实现**，接受未验证；每处 Godoc 标 `UNVERIFIED`，§7.1 如实标注（用户决定） | 用户决定 |
 | 38 | BSD 的布局与 `_IOC` 算术 | 移出构建约束，使风险最高的部分能在**每个平台**被测试 | §10.8 |
+| 43 | `Shell()` 的探测顺序 | **父进程链 > login shell > `$SHELL` > `/bin/sh`**，对齐 qcode 的 `shell.rs`；`$SHELL` 不再优先，因为它往往不是用户此刻正在用的 shell | 本轮修正（§10.10） |
 
 ---
 
@@ -1050,7 +1069,7 @@ pub fn native_pty_system() -> Box<dyn PtySystem + Send>;
 **`cmdbuilder.rs` 能力清单**：`new`、`from_argv`、`new_default_prog`、`is_default_prog`、`arg`、`args`、`get_argv(_mut)`、`env`、`env_remove`、`env_clear`、`get_env`、`cwd`、`clear_cwd`、`get_cwd`、`iter_extra_env_as_str`、`iter_full_env_as_str`、`as_unix_command_line`、`set_controlling_tty`/`get_controlling_tty`、`umask`（unix）、`get_shell`。
 
 行为要点：
-- base env 在 `new()` 时**快照**；Unix 上补 `SHELL`（`$SHELL` 不可执行则回退 `getpwuid`，再回退 `/bin/sh`）。
+- base env 在 `new()` 时**快照**；Unix 上补 `SHELL`，值取 `Shell()`（父进程链 → login shell → `$SHELL` → `/bin/sh`）。
 - Windows 上合并 HKLM + HKCU 注册表环境，展开 `REG_EXPAND_SZ`，并**把用户 PATH 追加到系统 PATH 之后**；环境键大小写不敏感（内部 lower-case 规范化，保留 `preferred_key` 原始大小写）。
 - Unix `as_command()`：手动按 `PATH` 用 `access(X_OK)` 解析可执行文件，设 `arg0`，`current_dir` 在 `cwd` 非目录时回退 `HOME`，`env_clear()` 后设 `SHELL` 再逐项设置。
 - Windows `cmdline()`：用 MSVCRT 引号规则构造宽字符命令行（`append_quoted`），环境块为双 NUL 结尾的 UTF-16。
